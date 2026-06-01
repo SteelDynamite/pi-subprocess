@@ -150,7 +150,7 @@ Project agents override user agents with the same id when `agentScope: "both"`.
 
 ## Source Agents
 
-Any descendant folder containing `SUBAGENTS.md` becomes a source-owned boundary. The manifest advertises source agents by absolute path id, unless `manifest: false` is set. Direct reads/edits/searches/commands inside those folders are blocked; delegate with `id: "/absolute/source/root"` or a caller-cwd-relative path. The source root from `id` is used as the subagent cwd.
+Any descendant folder containing `SUBAGENTS.md` becomes a source-owned boundary. The manifest advertises source agents by absolute path id, unless `manifest: false` is set. Direct reads/edits/searches/commands inside those folders are blocked; delegate with `id: "/absolute/source/root"` or a caller-cwd-relative path. The source root from `id` is used as the subagent cwd. Source agents do not trigger a startup notification; boundary messages appear only when direct access is blocked during use.
 
 `SUBAGENTS.md` also replaces same-folder `AGENTS.md` by convention. Pi may still load `AGENTS.md`; this extension injects `SUBAGENTS.md` after normal context and states that it is more specific.
 

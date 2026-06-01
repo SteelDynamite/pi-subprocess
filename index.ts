@@ -57,7 +57,15 @@ const DEFAULT_KNOWN_TOOLS = new Set([
 ]);
 
 let knownToolNames = new Set(DEFAULT_KNOWN_TOOLS);
-const notifiedSourceCwds = new Set<string>();
+const notifiedSourceBoundaryKeys = new Set<string>();
+
+function notifySourceBoundaryDiscovered(ctx: ExtensionContext, root: string) {
+	if (!ctx.hasUI) return;
+	const key = `${path.resolve(ctx.cwd)}\0${path.resolve(root)}`;
+	if (notifiedSourceBoundaryKeys.has(key)) return;
+	notifiedSourceBoundaryKeys.add(key);
+	ctx.ui.notify(`Source boundary discovered: delegate to subagent id "${root}"`, "info");
+}
 
 function formatTokens(count: number): string {
 	if (count < 1000) return count.toString();
@@ -423,6 +431,7 @@ async function runSingleAgent(
 		const sourceRoots = scanSourceAgents(defaultCwd).agents.map((sourceAgent) => sourceAgent.rootDir);
 		const blocked = sourceRoots.find((root) => isPathInside(requestedCwd, root));
 		if (blocked) {
+			notifySourceBoundaryDiscovered(ctx, blocked);
 			return makeErrorResult(
 				agent.id,
 				task,
@@ -647,11 +656,6 @@ export default function (pi: ExtensionAPI) {
 			promptParts.push(`Subagent configuration errors:\n${configErrors.map((error) => `- ${error}`).join("\n")}`);
 		}
 
-		if (discovery.sourceAgents.length > 0 && ctx.hasUI && !notifiedSourceCwds.has(ctx.cwd)) {
-			notifiedSourceCwds.add(ctx.cwd);
-			ctx.ui.notify(`Source subagents detected: ${discovery.sourceAgents.map((agent) => agent.id).join(", ")}`, "info");
-		}
-
 		if (promptParts.length === 0) return;
 		return { systemPrompt: `${event.systemPrompt}\n\n${promptParts.join("\n\n")}` };
 	});
@@ -676,9 +680,11 @@ export default function (pi: ExtensionAPI) {
 			for (const root of sourceRoots) {
 				const rel = path.relative(ctx.cwd, root);
 				if (!rel.startsWith("..") && !path.isAbsolute(rel) && rel && command.includes(rel)) {
+					notifySourceBoundaryDiscovered(ctx, root);
 					return { block: true, reason: `Source boundary enforced: delegate to subagent id "${root}" instead of running commands inside it.` };
 				}
 				if (command.includes(root)) {
+					notifySourceBoundaryDiscovered(ctx, root);
 					return { block: true, reason: `Source boundary enforced: delegate to subagent id "${root}" instead of running commands inside it.` };
 				}
 			}
@@ -687,6 +693,7 @@ export default function (pi: ExtensionAPI) {
 		for (const candidate of candidatePaths) {
 			const root = sourceRoots.find((sourceRoot) => isPathInside(candidate, sourceRoot));
 			if (root) {
+				notifySourceBoundaryDiscovered(ctx, root);
 				return {
 					block: true,
 					reason: `Source boundary enforced: delegate to subagent id "${root}" instead of accessing it directly.`,
