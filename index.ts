@@ -344,6 +344,11 @@ function resolveAgent(defaultCwd: string, agents: AgentConfig[], id: string): Ag
 	return agents.find((a) => a.kind === "behavior" && a.id === id);
 }
 
+function resolveOptionalCwd(defaultCwd: string, cwd: string | undefined): string | undefined {
+	if (!cwd) return undefined;
+	return path.resolve(defaultCwd, cwd);
+}
+
 function makeErrorResult(agentId: string, task: string, message: string, step?: number): SingleResult {
 	return {
 		agent: agentId,
@@ -399,16 +404,24 @@ async function runSingleAgent(
 		return makeErrorResult(agent.id, task, `Subagent recursion limit reached (max depth ${MAX_SUBAGENT_DEPTH}).`, step);
 	}
 
-	if (agent.kind === "source" && cwd) {
-		return makeErrorResult(agent.id, task, "Invalid configuration: cwd is only supported for behavior agents.", step);
+	const requestedCwd = resolveOptionalCwd(defaultCwd, cwd);
+	const effectiveCwd = agent.kind === "source" ? agent.rootDir : requestedCwd ?? defaultCwd;
+
+	if (agent.kind === "source" && requestedCwd && path.resolve(requestedCwd) !== path.resolve(agent.rootDir)) {
+		return makeErrorResult(
+			agent.id,
+			task,
+			`Invalid configuration: source agent "${agent.id}" runs from its source root. Omit cwd or use the same path (${agent.rootDir}).`,
+			step,
+		);
 	}
 
 	const toolError = validateAgentTools(agent);
 	if (toolError) return makeErrorResult(agent.id, task, toolError, step);
 
-	if (agent.kind === "behavior" && cwd) {
+	if (agent.kind === "behavior" && requestedCwd) {
 		const sourceRoots = scanSourceAgents(defaultCwd).agents.map((sourceAgent) => sourceAgent.rootDir);
-		const blocked = sourceRoots.find((root) => isPathInside(cwd, root));
+		const blocked = sourceRoots.find((root) => isPathInside(requestedCwd, root));
 		if (blocked) {
 			return makeErrorResult(
 				agent.id,
@@ -438,7 +451,7 @@ async function runSingleAgent(
 		model: resolvedModel.model,
 		warning: resolvedModel.warning,
 		step,
-		cwd: agent.kind === "source" ? agent.rootDir : cwd ?? defaultCwd,
+		cwd: effectiveCwd,
 	};
 
 	const emitUpdate = () => {
@@ -473,7 +486,7 @@ async function runSingleAgent(
 				...(agent.kind === "source" ? { PI_SUBAGENT_SKIP_LOCAL_SUBAGENTS: agent.rootDir } : {}),
 			};
 			const proc = spawn(invocation.command, invocation.args, {
-				cwd: agent.kind === "source" ? agent.rootDir : cwd ?? defaultCwd,
+				cwd: effectiveCwd,
 				env: childEnv,
 				shell: false,
 				stdio: ["ignore", "pipe", "pipe"],
@@ -573,14 +586,14 @@ const TaskItem = Type.Object({
 	id: Type.Optional(Type.String({ description: "Subagent id to invoke" })),
 	agent: Type.Optional(Type.String({ description: "Deprecated alias for id" })),
 	task: Type.String({ description: "Task to delegate to the agent" }),
-	cwd: Type.Optional(Type.String({ description: "Working directory for behavior agent processes" })),
+	cwd: Type.Optional(Type.String({ description: "Optional legacy cwd override for behavior agents; omit normally" })),
 });
 
 const ChainItem = Type.Object({
 	id: Type.Optional(Type.String({ description: "Subagent id to invoke" })),
 	agent: Type.Optional(Type.String({ description: "Deprecated alias for id" })),
 	task: Type.String({ description: "Task with optional {previous} placeholder for prior output" }),
-	cwd: Type.Optional(Type.String({ description: "Working directory for behavior agent processes" })),
+	cwd: Type.Optional(Type.String({ description: "Optional legacy cwd override for behavior agents; omit normally" })),
 });
 
 const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
@@ -598,7 +611,7 @@ const SubagentParams = Type.Object({
 	confirmProjectAgents: Type.Optional(
 		Type.Boolean({ description: "Prompt before running project-local agents. Default: true.", default: true }),
 	),
-	cwd: Type.Optional(Type.String({ description: "Working directory for behavior agent process (single mode)" })),
+	cwd: Type.Optional(Type.String({ description: "Optional legacy cwd override for behavior agents (single mode); omit normally" })),
 });
 
 export default function (pi: ExtensionAPI) {
@@ -688,7 +701,8 @@ export default function (pi: ExtensionAPI) {
 		description: [
 			"Delegate tasks to specialized subagents with isolated context.",
 			"Modes: single (id + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
-			"Behavior ids are names; source ids are absolute or cwd-relative folders containing SUBAGENTS.md.",
+			"Use id for behavior agents and source agents; behavior agents run from the caller cwd by default, source agents run from their source root.",
+			"Source ids are absolute or caller-cwd-relative folders containing SUBAGENTS.md.",
 			'Default behavior agent scope is "user" (from ~/.pi/agent/agents).',
 			'To enable project-local behavior agents in .pi/agents, set agentScope: "both" (or "project").',
 		].join(" "),

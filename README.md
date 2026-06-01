@@ -96,6 +96,11 @@ Use a chain: first have scout find the read tool, then have planner suggest impr
 | Parallel | `{ tasks: [...] }` | Multiple `{ id, task }` tasks run concurrently (max 8, 4 concurrent) |
 | Chain | `{ chain: [...] }` | Sequential `{ id, task }` steps with `{previous}` placeholder |
 
+Working directory defaults:
+- Behavior agents run from the caller's current cwd.
+- Source agents run from the source root named by `id`.
+- `cwd` is a legacy behavior-agent override; omit it for normal use.
+
 ## Output Display
 
 **Collapsed view** (default):
@@ -145,7 +150,7 @@ Project agents override user agents with the same id when `agentScope: "both"`.
 
 ## Source Agents
 
-Any descendant folder containing `SUBAGENTS.md` becomes a source-owned boundary. The manifest advertises source agents by absolute path id, unless `manifest: false` is set. Direct reads/edits/searches/commands inside those folders are blocked; delegate with `id: "/absolute/source/root"` or a cwd-relative path.
+Any descendant folder containing `SUBAGENTS.md` becomes a source-owned boundary. The manifest advertises source agents by absolute path id, unless `manifest: false` is set. Direct reads/edits/searches/commands inside those folders are blocked; delegate with `id: "/absolute/source/root"` or a caller-cwd-relative path. The source root from `id` is used as the subagent cwd.
 
 `SUBAGENTS.md` also replaces same-folder `AGENTS.md` by convention. Pi may still load `AGENTS.md`; this extension injects `SUBAGENTS.md` after normal context and states that it is more specific.
 
