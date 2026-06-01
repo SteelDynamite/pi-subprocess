@@ -33,6 +33,8 @@ export interface AgentDiscoveryResult {
 }
 
 const SUBAGENTS_FILE = "SUBAGENTS.md";
+const DEFAULT_SOURCE_SCAN_MAX_DEPTH = 6;
+const DEFAULT_SOURCE_SCAN_TIMEOUT_MS = 500;
 const ALLOWED_FRONTMATTER_KEYS = new Set(["description", "tools", "model", "manifest", "resumable"]);
 const SKIP_SOURCE_SCAN_DIRS = new Set([
 	".git",
@@ -77,6 +79,13 @@ function isSymlink(p: string): boolean {
 	} catch {
 		return false;
 	}
+}
+
+function readPositiveIntegerEnv(name: string, defaultValue: number): number {
+	const value = process.env[name]?.trim();
+	if (!value) return defaultValue;
+	const parsed = Number(value);
+	return Number.isInteger(parsed) && parsed > 0 ? parsed : defaultValue;
 }
 
 function parseTools(value: unknown): string[] | undefined {
@@ -246,12 +255,27 @@ export function resolveSourceAgentId(cwd: string, id: string): AgentConfig | nul
 	return loaded.agent ?? null;
 }
 
-export function scanSourceAgents(cwd: string): { agents: AgentConfig[]; errors: string[] } {
+export function scanSourceAgents(
+	cwd: string,
+	options: { maxDepth?: number; timeoutMs?: number } = {},
+): { agents: AgentConfig[]; errors: string[] } {
 	const roots: AgentConfig[] = [];
 	const errors: string[] = [];
 	const start = path.resolve(cwd);
+	const maxDepth = options.maxDepth ?? readPositiveIntegerEnv("PI_SUBAGENT_SOURCE_SCAN_MAX_DEPTH", DEFAULT_SOURCE_SCAN_MAX_DEPTH);
+	const timeoutMs = options.timeoutMs ?? readPositiveIntegerEnv("PI_SUBAGENT_SOURCE_SCAN_TIMEOUT_MS", DEFAULT_SOURCE_SCAN_TIMEOUT_MS);
+	const startedAt = Date.now();
+	let timedOut = false;
 
-	function visit(dir: string) {
+	function isTimedOut(): boolean {
+		if (Date.now() - startedAt <= timeoutMs) return false;
+		timedOut = true;
+		return true;
+	}
+
+	function visit(dir: string, depth: number) {
+		if (isTimedOut()) return;
+
 		let entries: fs.Dirent[];
 		try {
 			entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -260,6 +284,7 @@ export function scanSourceAgents(cwd: string): { agents: AgentConfig[]; errors: 
 		}
 
 		for (const entry of entries) {
+			if (isTimedOut()) return;
 			if (!entry.isDirectory()) continue;
 			if (SKIP_SOURCE_SCAN_DIRS.has(entry.name)) continue;
 
@@ -274,11 +299,14 @@ export function scanSourceAgents(cwd: string): { agents: AgentConfig[]; errors: 
 				continue;
 			}
 
-			visit(child);
+			if (depth < maxDepth) visit(child, depth + 1);
 		}
 	}
 
-	visit(start);
+	visit(start, 1);
+	if (timedOut) {
+		errors.push(`Source subagent scan stopped after ${timeoutMs}ms. Increase PI_SUBAGENT_SOURCE_SCAN_TIMEOUT_MS if needed.`);
+	}
 	return { agents: roots, errors };
 }
 

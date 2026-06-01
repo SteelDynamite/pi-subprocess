@@ -158,6 +158,8 @@ Any descendant folder containing `SUBAGENTS.md` becomes a source-owned boundary.
 
 Only these frontmatter fields are supported: `description`, `tools`, `model`, `manifest`, `resumable`. If `tools` is present, it is an exact allowlist; omit it to inherit defaults. If `model` is a comma-separated list, the first configured/available model is used; otherwise the caller model is used with a warning. `resumable` defaults to `false` for behavior agents and `true` for source agents.
 
+Source-agent discovery is bounded so starting Pi from broad folders does not scan indefinitely. Defaults: max depth `6`, timeout `500ms`. Override with `PI_SUBAGENT_SOURCE_SCAN_MAX_DEPTH` and `PI_SUBAGENT_SOURCE_SCAN_TIMEOUT_MS`.
+
 ## Resumable Sessions
 
 Resumable sessions are tracked per main session and subagent id. A resumable result reports only the next required intent: `Next call to this subagent should use session: "resume"` or `"new"`. Calls with the wrong intent are blocked before spawning; over-limit blocks say to craft a fresh-session task prompt. The context threshold defaults to 60%.
