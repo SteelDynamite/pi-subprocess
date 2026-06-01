@@ -22,6 +22,7 @@ export interface AgentConfig {
 	kind: AgentKind;
 	filePath: string;
 	rootDir: string;
+	resumable: boolean;
 }
 
 export interface AgentDiscoveryResult {
@@ -32,7 +33,7 @@ export interface AgentDiscoveryResult {
 }
 
 const SUBAGENTS_FILE = "SUBAGENTS.md";
-const ALLOWED_FRONTMATTER_KEYS = new Set(["description", "tools", "model", "manifest"]);
+const ALLOWED_FRONTMATTER_KEYS = new Set(["description", "tools", "model", "manifest", "resumable"]);
 const SKIP_SOURCE_SCAN_DIRS = new Set([
 	".git",
 	".hg",
@@ -91,12 +92,13 @@ function parseTools(value: unknown): string[] | undefined {
 	return tools.length > 0 ? tools : undefined;
 }
 
-function parseManifest(value: unknown): boolean {
-	if (value === undefined || value === null) return true;
+function parseBoolean(value: unknown, defaultValue: boolean): boolean {
+	if (value === undefined || value === null) return defaultValue;
 	if (typeof value === "boolean") return value;
 	const normalized = String(value).trim().toLowerCase();
 	if (["false", "no", "0", "off"].includes(normalized)) return false;
-	return true;
+	if (["true", "yes", "1", "on"].includes(normalized)) return true;
+	return defaultValue;
 }
 
 function resolveAtIncludes(body: string, baseDir: string): string {
@@ -178,7 +180,8 @@ function loadSubagentFile(
 			description: frontmatter.description === undefined ? "" : String(frontmatter.description),
 			tools: parseTools(frontmatter.tools),
 			model: frontmatter.model === undefined ? undefined : String(frontmatter.model),
-			manifest: parseManifest(frontmatter.manifest),
+			manifest: parseBoolean(frontmatter.manifest, true),
+			resumable: parseBoolean(frontmatter.resumable, kind === "source"),
 			systemPrompt,
 			source,
 			kind,
@@ -236,7 +239,7 @@ export function loadSourceAgent(rootDir: string, options: { readBody: boolean } 
 }
 
 export function resolveSourceAgentId(cwd: string, id: string): AgentConfig | null {
-	const candidate = path.resolve(cwd, id);
+	const candidate = realPathIfExists(path.resolve(cwd, id));
 	const filePath = path.join(candidate, SUBAGENTS_FILE);
 	if (!fs.existsSync(filePath) || !isDirectory(candidate)) return null;
 	const loaded = loadSourceAgent(candidate, { readBody: true });
@@ -317,8 +320,16 @@ export function formatAgentList(agents: AgentConfig[], maxItems: number): { text
 	};
 }
 
+function realPathIfExists(p: string): string {
+	try {
+		return fs.realpathSync.native(p);
+	} catch {
+		return path.resolve(p);
+	}
+}
+
 export function isPathInside(candidate: string, root: string): boolean {
-	const rel = path.relative(path.resolve(root), path.resolve(candidate));
+	const rel = path.relative(realPathIfExists(root), realPathIfExists(candidate));
 	return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 

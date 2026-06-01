@@ -5,15 +5,16 @@
  * giving it an isolated context window.
  *
  * Supports three modes:
- *   - Single: { id: "name-or-source-path", task: "..." }
- *   - Parallel: { tasks: [{ id: "name-or-source-path", task: "..." }, ...] }
- *   - Chain: { chain: [{ id: "name-or-source-path", task: "... {previous} ..." }, ...] }
+ *   - Single: { id: "name-or-source-path", session: "new|resume", task: "..." }
+ *   - Parallel: { tasks: [{ id: "name-or-source-path", session: "new|resume", task: "..." }, ...] }
+ *   - Chain: { chain: [{ id: "name-or-source-path", session: "new|resume", task: "... {previous} ..." }, ...] }
  *
  * Uses JSON mode to capture structured output from subagents.
  */
 
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
+import * as crypto from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
@@ -43,6 +44,11 @@ const MAX_CONCURRENCY = 4;
 const COLLAPSED_ITEM_COUNT = 10;
 const PER_TASK_OUTPUT_CAP = 50 * 1024;
 const MAX_SUBAGENT_DEPTH = 5;
+const DEFAULT_CONTEXT_THRESHOLD = 0.6;
+const SUBAGENT_STATE_ENTRY = "subagent-state";
+const CURRENT_SOURCE_ROOT_ENV = "PI_SUBAGENT_SOURCE_ROOT";
+const SOURCE_ANCESTOR_STACK_ENV = "PI_SUBAGENT_SOURCE_STACK";
+const LEGACY_CURRENT_SOURCE_ROOT_ENV = "PI_SUBAGENT_SKIP_LOCAL_SUBAGENTS";
 const DEFAULT_KNOWN_TOOLS = new Set([
 	"bash",
 	"read",
@@ -58,6 +64,43 @@ const DEFAULT_KNOWN_TOOLS = new Set([
 
 let knownToolNames = new Set(DEFAULT_KNOWN_TOOLS);
 const notifiedSourceBoundaryKeys = new Set<string>();
+let subagentSettings: SubagentSettings = { reuseEnabled: true, contextThreshold: DEFAULT_CONTEXT_THRESHOLD };
+const trackedSessions = new Map<string, TrackedSession>();
+
+function getMainSessionKey(ctx: ExtensionContext): string {
+	const manager = ctx.sessionManager as any;
+	return manager.getSessionFile?.() ?? manager.getSessionId?.() ?? `memory:${path.resolve(ctx.cwd)}`;
+}
+
+function getSessionRecordKey(ctx: ExtensionContext, agentId: string): string {
+	return `${getMainSessionKey(ctx)}\0${agentId}`;
+}
+
+function restoreSubagentState(ctx: ExtensionContext) {
+	const branchEntries = ctx.sessionManager.getBranch();
+	let latest: PersistedSubagentState | undefined;
+	for (const entry of branchEntries) {
+		if (entry.type === "custom" && entry.customType === SUBAGENT_STATE_ENTRY) {
+			latest = entry.data as PersistedSubagentState | undefined;
+		}
+	}
+	if (!latest) return;
+	subagentSettings = {
+		reuseEnabled: latest.settings?.reuseEnabled ?? true,
+		contextThreshold: latest.settings?.contextThreshold ?? DEFAULT_CONTEXT_THRESHOLD,
+	};
+	trackedSessions.clear();
+	for (const record of latest.sessions ?? []) {
+		trackedSessions.set(`${record.mainSessionKey}\0${record.agentId}`, record);
+	}
+}
+
+function persistSubagentState(pi: ExtensionAPI) {
+	pi.appendEntry<PersistedSubagentState>(SUBAGENT_STATE_ENTRY, {
+		settings: subagentSettings,
+		sessions: Array.from(trackedSessions.values()),
+	});
+}
 
 function notifySourceBoundaryDiscovered(ctx: ExtensionContext, root: string) {
 	if (!ctx.hasUI) return;
@@ -168,6 +211,10 @@ function formatToolCall(
 	}
 }
 
+type SessionIntent = "new" | "resume";
+
+type NextIntentReason = "none" | "under-threshold" | "over-threshold" | "reuse-disabled" | "non-resumable";
+
 interface UsageStats {
 	input: number;
 	output: number;
@@ -176,6 +223,27 @@ interface UsageStats {
 	cost: number;
 	contextTokens: number;
 	turns: number;
+}
+
+interface SubagentSettings {
+	reuseEnabled: boolean;
+	contextThreshold: number;
+}
+
+interface TrackedSession {
+	mainSessionKey: string;
+	agentId: string;
+	sessionId: string;
+	nextIntent: SessionIntent;
+	reason: NextIntentReason;
+	contextTokens: number;
+	contextWindow?: number;
+	updatedAt: number;
+}
+
+interface PersistedSubagentState {
+	settings: SubagentSettings;
+	sessions: TrackedSession[];
 }
 
 interface SingleResult {
@@ -187,11 +255,13 @@ interface SingleResult {
 	stderr: string;
 	usage: UsageStats;
 	model?: string;
+	contextWindow?: number;
 	warning?: string;
 	stopReason?: string;
 	errorMessage?: string;
 	step?: number;
 	cwd?: string;
+	nextSessionIntent?: SessionIntent;
 }
 
 interface SubagentDetails {
@@ -220,10 +290,13 @@ function isFailedResult(result: SingleResult): boolean {
 
 function getResultOutput(result: SingleResult): string {
 	const warning = result.warning ? `Warning: ${result.warning}\n\n` : "";
+	const nextIntent = result.nextSessionIntent
+		? `\n\nNext call to this subagent should use session: "${result.nextSessionIntent}"`
+		: "";
 	if (isFailedResult(result)) {
 		return warning + (result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)");
 	}
-	return warning + (getFinalOutput(result.messages) || "(no output)");
+	return warning + (getFinalOutput(result.messages) || "(no output)") + nextIntent;
 }
 
 function truncateParallelOutput(output: string): string {
@@ -302,9 +375,10 @@ function formatModelRef(model: ExtensionContext["model"]): string | undefined {
 	return model ? `${model.provider}/${model.id}` : undefined;
 }
 
-function resolveAgentModel(agent: AgentConfig, ctx: ExtensionContext): { model?: string; warning?: string } {
+function resolveAgentModel(agent: AgentConfig, ctx: ExtensionContext): { model?: string; contextWindow?: number; warning?: string } {
 	const callerModel = formatModelRef(ctx.model);
-	if (!agent.model?.trim()) return { model: callerModel };
+	const callerContextWindow = (ctx.model as any)?.contextWindow;
+	if (!agent.model?.trim()) return { model: callerModel, contextWindow: callerContextWindow };
 
 	const candidates = agent.model
 		.split(",")
@@ -314,11 +388,12 @@ function resolveAgentModel(agent: AgentConfig, ctx: ExtensionContext): { model?:
 
 	for (const candidate of candidates) {
 		const match = available.find((model) => `${model.provider}/${model.id}` === candidate || model.id === candidate);
-		if (match) return { model: `${match.provider}/${match.id}` };
+		if (match) return { model: `${match.provider}/${match.id}`, contextWindow: (match as any).contextWindow };
 	}
 
 	return {
 		model: callerModel,
+		contextWindow: callerContextWindow,
 		warning: `No configured model from "${agent.model}" for ${agent.id}; using caller model${callerModel ? ` ${callerModel}` : ""}.`,
 	};
 }
@@ -357,6 +432,90 @@ function resolveOptionalCwd(defaultCwd: string, cwd: string | undefined): string
 	return path.resolve(defaultCwd, cwd);
 }
 
+function isFilesystemIdentifier(value: string, cwd: string): boolean {
+	const trimmed = value.trim();
+	if (!trimmed) return false;
+	if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) return false;
+	if (/^git:[^/]/i.test(trimmed)) return false;
+	if (path.isAbsolute(trimmed) || trimmed.startsWith("./") || trimmed.startsWith("../") || trimmed === "." || trimmed === ".." || trimmed.startsWith("~/")) return true;
+	if (/[\\/]/.test(trimmed)) return true;
+	return fs.existsSync(path.resolve(cwd, trimmed));
+}
+
+function resolveFilesystemTarget(cwd: string, value: string): string | null {
+	const trimmed = value.trim();
+	if (!isFilesystemIdentifier(trimmed, cwd)) return null;
+	const expanded = trimmed.startsWith("~/") ? path.join(os.homedir(), trimmed.slice(2)) : trimmed;
+	const resolved = path.resolve(cwd, expanded);
+	try {
+		return fs.realpathSync.native(resolved);
+	} catch {
+		return resolved;
+	}
+}
+
+function shellTokens(command: string): string[] {
+	const tokens: string[] = [];
+	let current = "";
+	let quote: '"' | "'" | null = null;
+	let escaped = false;
+	for (const ch of command) {
+		if (escaped) {
+			current += ch;
+			escaped = false;
+			continue;
+		}
+		if (ch === "\\" && quote !== "'") {
+			escaped = true;
+			continue;
+		}
+		if ((ch === '"' || ch === "'") && !quote) {
+			quote = ch;
+			continue;
+		}
+		if (quote === ch) {
+			quote = null;
+			continue;
+		}
+		if (!quote && /\s/.test(ch)) {
+			if (current) tokens.push(current);
+			current = "";
+			continue;
+		}
+		current += ch;
+	}
+	if (current) tokens.push(current);
+	return tokens;
+}
+
+function commandFilesystemTargets(command: string, cwd: string): string[] {
+	const tokens = shellTokens(command);
+	const targets: string[] = [];
+	const optionNeedsValue = new Set(["-C", "--cwd", "--prefix", "--dir", "--directory", "--chdir", "--path", "--work-tree", "--git-dir"]);
+	for (let i = 0; i < tokens.length; i++) {
+		const token = tokens[i];
+		const commandName = path.basename(token);
+		if (["cd", "pushd", "popd"].includes(commandName) && tokens[i + 1]) {
+			const target = resolveFilesystemTarget(cwd, tokens[i + 1]);
+			if (target) targets.push(target);
+		}
+		if (optionNeedsValue.has(token) && tokens[i + 1]) {
+			const target = resolveFilesystemTarget(cwd, tokens[i + 1]);
+			if (target) targets.push(target);
+			continue;
+		}
+		const optionMatch = token.match(/^(--(?:cwd|prefix|dir|directory|chdir|path|work-tree|git-dir))=(.+)$/);
+		if (optionMatch) {
+			const target = resolveFilesystemTarget(cwd, optionMatch[2]);
+			if (target) targets.push(target);
+			continue;
+		}
+		const target = resolveFilesystemTarget(cwd, token);
+		if (target) targets.push(target);
+	}
+	return targets;
+}
+
 function makeErrorResult(agentId: string, task: string, message: string, step?: number): SingleResult {
 	return {
 		agent: agentId,
@@ -388,11 +547,105 @@ function getPiInvocation(args: string[]): { command: string; args: string[] } {
 
 type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
 
+function canonicalPath(value: string): string {
+	const resolved = path.resolve(value);
+	try {
+		return fs.realpathSync.native(resolved);
+	} catch {
+		return resolved;
+	}
+}
+
+function getEnvSourceRoot(name: string): string | undefined {
+	const value = process.env[name]?.trim();
+	return value ? canonicalPath(value) : undefined;
+}
+
+function getSourceAncestorStack(): string[] {
+	const raw = process.env[SOURCE_ANCESTOR_STACK_ENV]?.trim();
+	const roots: string[] = [];
+	if (raw) {
+		try {
+			const parsed = JSON.parse(raw);
+			if (Array.isArray(parsed)) roots.push(...parsed.filter((item): item is string => typeof item === "string"));
+		} catch {
+			roots.push(...raw.split(path.delimiter).filter(Boolean));
+		}
+	}
+	const current = getEnvSourceRoot(CURRENT_SOURCE_ROOT_ENV) ?? getEnvSourceRoot(LEGACY_CURRENT_SOURCE_ROOT_ENV);
+	if (current) roots.push(current);
+	return Array.from(new Set(roots.map(canonicalPath)));
+}
+
+function formatSourceLoopError(agent: AgentConfig, matchingRoot: string): string {
+	const stack = getSourceAncestorStack();
+	const chain = [...stack, canonicalPath(agent.rootDir)].join(" -> ");
+	return `Source delegation loop blocked: source agent "${agent.id}" resolves to "${canonicalPath(agent.rootDir)}", which is already active as "${matchingRoot}".${chain ? ` Stack: ${chain}.` : ""}`;
+}
+
+function getSourceLoopError(agent: AgentConfig): string | undefined {
+	if (agent.kind !== "source") return undefined;
+	const targetRoot = canonicalPath(agent.rootDir);
+	const matchingRoot = getSourceAncestorStack().find((root) => root === targetRoot);
+	return matchingRoot ? formatSourceLoopError(agent, matchingRoot) : undefined;
+}
+
+function makeChildSourceEnv(agent: AgentConfig): Record<string, string> {
+	if (agent.kind !== "source") return {};
+	const targetRoot = canonicalPath(agent.rootDir);
+	const stack = Array.from(new Set([...getSourceAncestorStack(), targetRoot]));
+	return {
+		[CURRENT_SOURCE_ROOT_ENV]: targetRoot,
+		[SOURCE_ANCESTOR_STACK_ENV]: JSON.stringify(stack),
+		[LEGACY_CURRENT_SOURCE_ROOT_ENV]: targetRoot,
+	};
+}
+
+function getRequiredSessionIntent(ctx: ExtensionContext, agent: AgentConfig): { intent: SessionIntent; reason: NextIntentReason; record?: TrackedSession } {
+	if (!agent.resumable) return { intent: "new", reason: "non-resumable" };
+	if (!subagentSettings.reuseEnabled) return { intent: "new", reason: "reuse-disabled" };
+	const record = trackedSessions.get(getSessionRecordKey(ctx, agent.id));
+	if (!record) return { intent: "new", reason: "none" };
+	return { intent: record.nextIntent, reason: record.reason, record };
+}
+
+function formatWrongIntentReason(agent: AgentConfig, requested: SessionIntent, required: SessionIntent, reason: NextIntentReason): string {
+	if (!agent.resumable) return `Wrong session intent for "${agent.id}": requested "${requested}", but this subagent is not resumable and requires session: "new".`;
+	if (reason === "reuse-disabled") return `Wrong session intent for "${agent.id}": requested "${requested}", but resumable session reuse is disabled and requires session: "new".`;
+	if (reason === "over-threshold") return `Wrong session intent for "${agent.id}": requested "${requested}", but the source session is over the context limit and requires session: "new". Craft a fresh-session task prompt.`;
+	if (reason === "none") return `Wrong session intent for "${agent.id}": requested "${requested}", but no prior reusable session exists; use session: "new".`;
+	return `Wrong session intent for "${agent.id}": requested "${requested}", but the next required session intent is "${required}".`;
+}
+
+function updateTrackedSession(ctx: ExtensionContext, agent: AgentConfig, sessionId: string | undefined, result: SingleResult) {
+	if (!agent.resumable || !subagentSettings.reuseEnabled || !sessionId || isFailedResult(result)) {
+		result.nextSessionIntent = "new";
+		return;
+	}
+	const contextTokens = result.usage.contextTokens;
+	const contextWindow = result.contextWindow;
+	const overThreshold = Boolean(contextWindow && contextTokens > 0 && contextTokens / contextWindow >= subagentSettings.contextThreshold);
+	const record: TrackedSession = {
+		mainSessionKey: getMainSessionKey(ctx),
+		agentId: agent.id,
+		sessionId,
+		nextIntent: overThreshold ? "new" : "resume",
+		reason: overThreshold ? "over-threshold" : "under-threshold",
+		contextTokens,
+		contextWindow,
+		updatedAt: Date.now(),
+	};
+	trackedSessions.set(getSessionRecordKey(ctx, agent.id), record);
+	result.nextSessionIntent = record.nextIntent;
+}
+
 async function runSingleAgent(
+	pi: ExtensionAPI,
 	ctx: ExtensionContext,
 	defaultCwd: string,
 	agents: AgentConfig[],
 	agentId: string,
+	session: SessionIntent,
 	task: string,
 	cwd: string | undefined,
 	step: number | undefined,
@@ -412,6 +665,9 @@ async function runSingleAgent(
 		return makeErrorResult(agent.id, task, `Subagent recursion limit reached (max depth ${MAX_SUBAGENT_DEPTH}).`, step);
 	}
 
+	const sourceLoopError = getSourceLoopError(agent);
+	if (sourceLoopError) return makeErrorResult(agent.id, task, sourceLoopError, step);
+
 	const requestedCwd = resolveOptionalCwd(defaultCwd, cwd);
 	const effectiveCwd = agent.kind === "source" ? agent.rootDir : requestedCwd ?? defaultCwd;
 
@@ -426,6 +682,16 @@ async function runSingleAgent(
 
 	const toolError = validateAgentTools(agent);
 	if (toolError) return makeErrorResult(agent.id, task, toolError, step);
+
+	const requiredSession = getRequiredSessionIntent(ctx, agent);
+	if (session !== requiredSession.intent) {
+		return makeErrorResult(
+			agent.id,
+			task,
+			formatWrongIntentReason(agent, session, requiredSession.intent, requiredSession.reason),
+			step,
+		);
+	}
 
 	if (agent.kind === "behavior" && requestedCwd) {
 		const sourceRoots = scanSourceAgents(defaultCwd).agents.map((sourceAgent) => sourceAgent.rootDir);
@@ -442,7 +708,14 @@ async function runSingleAgent(
 	}
 
 	const resolvedModel = resolveAgentModel(agent, ctx);
-	const args: string[] = ["--mode", "json", "-p", "--no-session"];
+	const subagentSessionId = agent.resumable && subagentSettings.reuseEnabled
+		? session === "resume"
+			? requiredSession.record?.sessionId
+			: crypto.randomUUID()
+		: undefined;
+	const args: string[] = ["--mode", "json", "-p"];
+	if (subagentSessionId) args.push("--session-id", subagentSessionId);
+	else args.push("--no-session");
 	if (resolvedModel.model) args.push("--model", resolvedModel.model);
 	if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
 
@@ -458,6 +731,7 @@ async function runSingleAgent(
 		stderr: "",
 		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
 		model: resolvedModel.model,
+		contextWindow: resolvedModel.contextWindow,
 		warning: resolvedModel.warning,
 		step,
 		cwd: effectiveCwd,
@@ -492,7 +766,7 @@ async function runSingleAgent(
 			const childEnv = {
 				...process.env,
 				PI_SUBAGENT_DEPTH: String(currentDepth + 1),
-				...(agent.kind === "source" ? { PI_SUBAGENT_SKIP_LOCAL_SUBAGENTS: agent.rootDir } : {}),
+				...makeChildSourceEnv(agent),
 			};
 			const proc = spawn(invocation.command, invocation.args, {
 				cwd: effectiveCwd,
@@ -574,6 +848,8 @@ async function runSingleAgent(
 
 		currentResult.exitCode = exitCode;
 		if (wasAborted) throw new Error("Subagent was aborted");
+		updateTrackedSession(ctx, agent, subagentSessionId, currentResult);
+		if (agent.resumable) persistSubagentState(pi);
 		return currentResult;
 	} finally {
 		if (tmpPromptPath)
@@ -591,9 +867,14 @@ async function runSingleAgent(
 	}
 }
 
+const SessionIntentSchema = StringEnum(["new", "resume"] as const, {
+	description: 'Required session intent. Use "new" for first/fresh calls and "resume" only when the previous result said so.',
+});
+
 const TaskItem = Type.Object({
 	id: Type.Optional(Type.String({ description: "Subagent id to invoke" })),
 	agent: Type.Optional(Type.String({ description: "Deprecated alias for id" })),
+	session: SessionIntentSchema,
 	task: Type.String({ description: "Task to delegate to the agent" }),
 	cwd: Type.Optional(Type.String({ description: "Optional legacy cwd override for behavior agents; omit normally" })),
 });
@@ -601,6 +882,7 @@ const TaskItem = Type.Object({
 const ChainItem = Type.Object({
 	id: Type.Optional(Type.String({ description: "Subagent id to invoke" })),
 	agent: Type.Optional(Type.String({ description: "Deprecated alias for id" })),
+	session: SessionIntentSchema,
 	task: Type.String({ description: "Task with optional {previous} placeholder for prior output" }),
 	cwd: Type.Optional(Type.String({ description: "Optional legacy cwd override for behavior agents; omit normally" })),
 });
@@ -613,6 +895,7 @@ const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
 const SubagentParams = Type.Object({
 	id: Type.Optional(Type.String({ description: "Subagent id to invoke (for single mode)" })),
 	agent: Type.Optional(Type.String({ description: "Deprecated alias for id (single mode)" })),
+	session: Type.Optional(SessionIntentSchema),
 	task: Type.Optional(Type.String({ description: "Task to delegate (for single mode)" })),
 	tasks: Type.Optional(Type.Array(TaskItem, { description: "Array of {id, task} for parallel execution" })),
 	chain: Type.Optional(Type.Array(ChainItem, { description: "Array of {id, task} for sequential execution" })),
@@ -624,6 +907,54 @@ const SubagentParams = Type.Object({
 });
 
 export default function (pi: ExtensionAPI) {
+	pi.on("session_start", async (_event, ctx) => restoreSubagentState(ctx));
+	pi.on("session_tree", async (_event, ctx) => restoreSubagentState(ctx));
+
+	pi.registerCommand("subagent-settings", {
+		description: "Configure subagent session reuse and context threshold",
+		handler: async (_args, ctx) => {
+			restoreSubagentState(ctx);
+			while (true) {
+				const sessionKey = getMainSessionKey(ctx);
+				const active = Array.from(trackedSessions.values()).filter((record) => record.mainSessionKey === sessionKey);
+				const choice = await ctx.ui.select("Subagent settings", [
+					`Reuse: ${subagentSettings.reuseEnabled ? "enabled" : "disabled"}`,
+					`Context threshold: ${Math.round(subagentSettings.contextThreshold * 100)}%`,
+					`Active resumable sessions: ${active.length}`,
+					"Reset tracked resumable sessions",
+					"Close",
+				]);
+				if (!choice || choice === "Close") return;
+				if (choice.startsWith("Reuse:")) {
+					subagentSettings.reuseEnabled = !subagentSettings.reuseEnabled;
+					persistSubagentState(pi);
+					ctx.ui.notify(`Subagent reuse ${subagentSettings.reuseEnabled ? "enabled" : "disabled"}.`, "info");
+				} else if (choice.startsWith("Context threshold:")) {
+					const input = await ctx.ui.input("Context threshold percent", String(Math.round(subagentSettings.contextThreshold * 100)));
+					if (!input) continue;
+					const percent = Number(input.trim().replace(/%$/, ""));
+					if (!Number.isFinite(percent) || percent <= 0 || percent > 100) {
+						ctx.ui.notify("Threshold must be between 1 and 100.", "error");
+						continue;
+					}
+					subagentSettings.contextThreshold = percent / 100;
+					persistSubagentState(pi);
+				} else if (choice.startsWith("Active resumable sessions:")) {
+					const lines = active.length === 0
+						? ["No active resumable sessions."]
+						: active.map((record) => `${record.agentId}: next session \"${record.nextIntent}\"${record.contextWindow ? ` (${record.contextTokens}/${record.contextWindow} tokens)` : ""}`);
+					ctx.ui.notify(lines.join("\n"), "info");
+				} else if (choice === "Reset tracked resumable sessions") {
+					const ok = await ctx.ui.confirm("Reset subagent sessions?", "Clear tracked resumable subagent sessions for the current main session.");
+					if (!ok) continue;
+					for (const [key, record] of trackedSessions) if (record.mainSessionKey === sessionKey) trackedSessions.delete(key);
+					persistSubagentState(pi);
+					ctx.ui.notify("Tracked resumable subagent sessions reset.", "info");
+				}
+			}
+		},
+	});
+
 	pi.on("before_agent_start", async (event, ctx) => {
 		knownToolNames = new Set([
 			...DEFAULT_KNOWN_TOOLS,
@@ -637,7 +968,7 @@ export default function (pi: ExtensionAPI) {
 
 		if (manifest) {
 			promptParts.push(
-				`Subagents can be delegated to with the subagent tool by id. Source subagent ids are source-owned boundaries; do not read, search, edit, or run commands inside those folders directly from this agent.\n\n${manifest}`,
+				`Subagents can be delegated to with the subagent tool by id and required session intent ("new" or "resume"). Use session: "new" for a first/fresh call; use session: "resume" only when the previous result for that same subagent said to. Source subagent ids are source-owned boundaries; do not read, search, edit, or run commands inside those folders directly from this agent. Do not delegate a source agent to its own current source root or an active source ancestor; the tool blocks recursive source loops.\n\n${manifest}`,
 			);
 		}
 
@@ -709,7 +1040,7 @@ export default function (pi: ExtensionAPI) {
 			"Delegate tasks to specialized subagents with isolated context.",
 			"Modes: single (id + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
 			"Use id for behavior agents and source agents; behavior agents run from the caller cwd by default, source agents run from their source root.",
-			"Source ids are absolute or caller-cwd-relative folders containing SUBAGENTS.md.",
+			"Source ids are absolute or caller-cwd-relative folders containing SUBAGENTS.md; recursive source delegation to the current source root or active source stack is blocked.",
 			'Default behavior agent scope is "user" (from ~/.pi/agent/agents).',
 			'To enable project-local behavior agents in .pi/agents, set agentScope: "both" (or "project").',
 		].join(" "),
@@ -748,6 +1079,27 @@ export default function (pi: ExtensionAPI) {
 					],
 					details: makeDetails("single")([]),
 				};
+			}
+
+			const mode = hasChain ? "chain" : hasTasks ? "parallel" : "single";
+			const requestedDelegations = hasChain
+				? params.chain!.map((step, index) => ({ id: getAgentId(step), task: step.task, step: index + 1 }))
+				: hasTasks
+					? params.tasks!.map((task) => ({ id: getAgentId(task), task: task.task }))
+					: [{ id: singleId, task: params.task ?? "" }];
+			for (const requested of requestedDelegations) {
+				if (!requested.id) continue;
+				const agent = resolveAgent(ctx.cwd, agents, requested.id);
+				if (!agent) continue;
+				const sourceLoopError = getSourceLoopError(agent);
+				if (sourceLoopError) {
+					const result = makeErrorResult(agent.id, requested.task, sourceLoopError, requested.step);
+					return {
+						content: [{ type: "text", text: sourceLoopError }],
+						details: makeDetails(mode)([result]),
+						isError: true,
+					};
+				}
 			}
 
 			if ((agentScope === "project" || agentScope === "both") && confirmProjectAgents && ctx.hasUI) {
@@ -807,10 +1159,12 @@ export default function (pi: ExtensionAPI) {
 						: undefined;
 
 					const result = await runSingleAgent(
+						pi,
 						ctx,
 						ctx.cwd,
 						agents,
 						stepId,
+						step.session ?? "new",
 						taskWithContext,
 						step.cwd,
 						i + 1,
@@ -882,10 +1236,12 @@ export default function (pi: ExtensionAPI) {
 					const taskId = getAgentId(t);
 					if (!taskId) return makeErrorResult("(missing id)", t.task, "Missing subagent id.");
 					const result = await runSingleAgent(
+						pi,
 						ctx,
 						ctx.cwd,
 						agents,
 						taskId,
+						t.session ?? "new",
 						t.task,
 						t.cwd,
 						undefined,
@@ -925,10 +1281,12 @@ export default function (pi: ExtensionAPI) {
 
 			if (singleId && params.task) {
 				const result = await runSingleAgent(
+					pi,
 					ctx,
 					ctx.cwd,
 					agents,
 					singleId,
+					params.session ?? "new",
 					params.task,
 					params.cwd,
 					undefined,
