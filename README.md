@@ -92,14 +92,15 @@ Use a chain: first have scout find the read tool, then have planner suggest impr
 
 | Mode | Parameter | Description |
 |------|-----------|-------------|
-| Single | `{ id, task }` | One subagent id, one task (`agent` remains as a deprecated alias) |
-| Parallel | `{ tasks: [...] }` | Multiple `{ id, task }` tasks run concurrently (max 8, 4 concurrent) |
-| Chain | `{ chain: [...] }` | Sequential `{ id, task }` steps with `{previous}` placeholder |
+| Single | `{ id, session, task }` | One subagent id, required session intent (`"new"` or `"resume"`), one task (`agent` remains as a deprecated alias) |
+| Parallel | `{ tasks: [...] }` | Multiple `{ id, session, task }` tasks run concurrently (max 8, 4 concurrent) |
+| Chain | `{ chain: [...] }` | Sequential `{ id, session, task }` steps with `{previous}` placeholder |
 
 Working directory defaults:
 - Behavior agents run from the caller's current cwd.
 - Source agents run from the source root named by `id`.
 - `cwd` is a legacy behavior-agent override; omit it for normal use.
+- `session` is required on every subagent call. Use `"new"` for a first/fresh prompt and `"resume"` only when the previous result said so.
 
 ## Output Display
 
@@ -137,6 +138,7 @@ description: What this agent does
 tools: read, grep, find, ls
 model: openai-codex/gpt-5.5, openai-codex/gpt-5.4-mini
 manifest: true
+resumable: false
 ---
 
 System prompt for the agent goes here.
@@ -154,7 +156,13 @@ Any descendant folder containing `SUBAGENTS.md` becomes a source-owned boundary.
 
 `SUBAGENTS.md` also replaces same-folder `AGENTS.md` by convention. Pi may still load `AGENTS.md`; this extension injects `SUBAGENTS.md` after normal context and states that it is more specific.
 
-Only these frontmatter fields are supported: `description`, `tools`, `model`, `manifest`. If `tools` is present, it is an exact allowlist; omit it to inherit defaults. If `model` is a comma-separated list, the first configured/available model is used; otherwise the caller model is used with a warning.
+Only these frontmatter fields are supported: `description`, `tools`, `model`, `manifest`, `resumable`. If `tools` is present, it is an exact allowlist; omit it to inherit defaults. If `model` is a comma-separated list, the first configured/available model is used; otherwise the caller model is used with a warning. `resumable` defaults to `false` for behavior agents and `true` for source agents.
+
+## Resumable Sessions
+
+Resumable sessions are tracked per main session and subagent id. A resumable result reports only the next required intent: `Next call to this subagent should use session: "resume"` or `"new"`. Calls with the wrong intent are blocked before spawning; over-limit blocks say to craft a fresh-session task prompt. The context threshold defaults to 60%.
+
+Use `/subagent-settings` to toggle reuse, set the context threshold, view active resumable sessions, or reset tracked resumable sessions for the current main session.
 
 ## Sample Agents
 

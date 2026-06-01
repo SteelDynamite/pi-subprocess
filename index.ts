@@ -371,6 +371,21 @@ function getAgentId(input: { id?: string; agent?: string }): string | undefined 
 	return input.id ?? input.agent;
 }
 
+function getMissingSessionError(params: any): string | undefined {
+	if (Array.isArray(params.chain) && params.chain.length > 0) {
+		const missingIndex = params.chain.findIndex((step: any) => !step.session);
+		if (missingIndex >= 0) return `Missing required session intent for chain step ${missingIndex + 1}; set session to "new" or "resume".`;
+	}
+	if (Array.isArray(params.tasks) && params.tasks.length > 0) {
+		const missingIndex = params.tasks.findIndex((task: any) => !task.session);
+		if (missingIndex >= 0) return `Missing required session intent for parallel task ${missingIndex + 1}; set session to "new" or "resume".`;
+	}
+	if (getAgentId(params) && params.task && !params.session) {
+		return 'Missing required session intent for single subagent call; set session to "new" or "resume".';
+	}
+	return undefined;
+}
+
 function formatModelRef(model: ExtensionContext["model"]): string | undefined {
 	return model ? `${model.provider}/${model.id}` : undefined;
 }
@@ -432,19 +447,19 @@ function resolveOptionalCwd(defaultCwd: string, cwd: string | undefined): string
 	return path.resolve(defaultCwd, cwd);
 }
 
-function isFilesystemIdentifier(value: string, cwd: string): boolean {
+function isFilesystemIdentifier(value: string, cwd: string, options: { allowBare?: boolean } = {}): boolean {
 	const trimmed = value.trim();
 	if (!trimmed) return false;
 	if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) return false;
 	if (/^git:[^/]/i.test(trimmed)) return false;
 	if (path.isAbsolute(trimmed) || trimmed.startsWith("./") || trimmed.startsWith("../") || trimmed === "." || trimmed === ".." || trimmed.startsWith("~/")) return true;
 	if (/[\\/]/.test(trimmed)) return true;
-	return fs.existsSync(path.resolve(cwd, trimmed));
+	return Boolean(options.allowBare && fs.existsSync(path.resolve(cwd, trimmed)));
 }
 
-function resolveFilesystemTarget(cwd: string, value: string): string | null {
+function resolveFilesystemTarget(cwd: string, value: string, options: { allowBare?: boolean } = {}): string | null {
 	const trimmed = value.trim();
-	if (!isFilesystemIdentifier(trimmed, cwd)) return null;
+	if (!isFilesystemIdentifier(trimmed, cwd, options)) return null;
 	const expanded = trimmed.startsWith("~/") ? path.join(os.homedir(), trimmed.slice(2)) : trimmed;
 	const resolved = path.resolve(cwd, expanded);
 	try {
@@ -492,26 +507,26 @@ function commandFilesystemTargets(command: string, cwd: string): string[] {
 	const tokens = shellTokens(command);
 	const targets: string[] = [];
 	const optionNeedsValue = new Set(["-C", "--cwd", "--prefix", "--dir", "--directory", "--chdir", "--path", "--work-tree", "--git-dir"]);
+	const pathArgCommands = new Set(["cd", "pushd", "popd", "ls", "cat", "stat", "tail", "head", "less", "more", "realpath", "readlink"]);
+	const addTarget = (value: string, allowBare = false) => {
+		const target = resolveFilesystemTarget(cwd, value, { allowBare });
+		if (target) targets.push(target);
+	};
+
 	for (let i = 0; i < tokens.length; i++) {
 		const token = tokens[i];
 		const commandName = path.basename(token);
-		if (["cd", "pushd", "popd"].includes(commandName) && tokens[i + 1]) {
-			const target = resolveFilesystemTarget(cwd, tokens[i + 1]);
-			if (target) targets.push(target);
-		}
+		if (pathArgCommands.has(commandName) && tokens[i + 1]) addTarget(tokens[i + 1], true);
 		if (optionNeedsValue.has(token) && tokens[i + 1]) {
-			const target = resolveFilesystemTarget(cwd, tokens[i + 1]);
-			if (target) targets.push(target);
+			addTarget(tokens[i + 1], true);
 			continue;
 		}
 		const optionMatch = token.match(/^(--(?:cwd|prefix|dir|directory|chdir|path|work-tree|git-dir))=(.+)$/);
 		if (optionMatch) {
-			const target = resolveFilesystemTarget(cwd, optionMatch[2]);
-			if (target) targets.push(target);
+			addTarget(optionMatch[2], true);
 			continue;
 		}
-		const target = resolveFilesystemTarget(cwd, token);
-		if (target) targets.push(target);
+		addTarget(token, false);
 	}
 	return targets;
 }
@@ -590,6 +605,24 @@ function getSourceLoopError(agent: AgentConfig): string | undefined {
 	return matchingRoot ? formatSourceLoopError(agent, matchingRoot) : undefined;
 }
 
+function findContainingSourceRoot(cwd: string): string | undefined {
+	let current = path.resolve(cwd);
+	while (true) {
+		if (fs.existsSync(path.join(current, getSubagentsFileName()))) return canonicalPath(current);
+		const parent = path.dirname(current);
+		if (parent === current) return undefined;
+		current = parent;
+	}
+}
+
+function getGuardedSourceRoots(cwd: string): string[] {
+	const activeSourceRoot = getEnvSourceRoot(CURRENT_SOURCE_ROOT_ENV) ?? getEnvSourceRoot(LEGACY_CURRENT_SOURCE_ROOT_ENV);
+	const roots = scanSourceAgents(cwd).agents.map((agent) => canonicalPath(agent.rootDir));
+	const containingRoot = findContainingSourceRoot(cwd);
+	if (containingRoot) roots.push(containingRoot);
+	return Array.from(new Set(roots)).filter((root) => !activeSourceRoot || root !== activeSourceRoot);
+}
+
 function makeChildSourceEnv(agent: AgentConfig): Record<string, string> {
 	if (agent.kind !== "source") return {};
 	const targetRoot = canonicalPath(agent.rootDir);
@@ -618,7 +651,8 @@ function formatWrongIntentReason(agent: AgentConfig, requested: SessionIntent, r
 }
 
 function updateTrackedSession(ctx: ExtensionContext, agent: AgentConfig, sessionId: string | undefined, result: SingleResult) {
-	if (!agent.resumable || !subagentSettings.reuseEnabled || !sessionId || isFailedResult(result)) {
+	if (!agent.resumable) return;
+	if (!subagentSettings.reuseEnabled || !sessionId || isFailedResult(result)) {
 		result.nextSessionIntent = "new";
 		return;
 	}
@@ -897,8 +931,8 @@ const SubagentParams = Type.Object({
 	agent: Type.Optional(Type.String({ description: "Deprecated alias for id (single mode)" })),
 	session: Type.Optional(SessionIntentSchema),
 	task: Type.Optional(Type.String({ description: "Task to delegate (for single mode)" })),
-	tasks: Type.Optional(Type.Array(TaskItem, { description: "Array of {id, task} for parallel execution" })),
-	chain: Type.Optional(Type.Array(ChainItem, { description: "Array of {id, task} for sequential execution" })),
+	tasks: Type.Optional(Type.Array(TaskItem, { description: "Array of {id, session, task} for parallel execution" })),
+	chain: Type.Optional(Type.Array(ChainItem, { description: "Array of {id, session, task} for sequential execution" })),
 	agentScope: Type.Optional(AgentScopeSchema),
 	confirmProjectAgents: Type.Optional(
 		Type.Boolean({ description: "Prompt before running project-local agents. Default: true.", default: true }),
@@ -993,7 +1027,7 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("tool_call", async (event, ctx) => {
 		if (event.toolName === "subagent") return;
-		const sourceRoots = scanSourceAgents(ctx.cwd).agents.map((agent) => agent.rootDir);
+		const sourceRoots = getGuardedSourceRoots(ctx.cwd);
 		if (sourceRoots.length === 0) return;
 
 		const input = (event.input ?? {}) as Record<string, unknown>;
@@ -1001,24 +1035,19 @@ export default function (pi: ExtensionAPI) {
 		const candidatePaths: string[] = [];
 		for (const key of pathKeys) {
 			const value = input[key];
-			if (typeof value === "string" && value.trim()) candidatePaths.push(path.resolve(ctx.cwd, value));
+			if (typeof value === "string" && value.trim()) {
+				const target = resolveFilesystemTarget(ctx.cwd, value, { allowBare: true });
+				if (target) candidatePaths.push(target);
+			}
 		}
 
 		if (event.toolName === "bash") {
-			const bashCwd = typeof input.cwd === "string" ? path.resolve(ctx.cwd, input.cwd) : ctx.cwd;
+			const bashCwd = typeof input.cwd === "string"
+				? resolveFilesystemTarget(ctx.cwd, input.cwd, { allowBare: true }) ?? path.resolve(ctx.cwd, input.cwd)
+				: ctx.cwd;
 			candidatePaths.push(bashCwd);
 			const command = typeof input.command === "string" ? input.command : "";
-			for (const root of sourceRoots) {
-				const rel = path.relative(ctx.cwd, root);
-				if (!rel.startsWith("..") && !path.isAbsolute(rel) && rel && command.includes(rel)) {
-					notifySourceBoundaryDiscovered(ctx, root);
-					return { block: true, reason: `Source boundary enforced: delegate to subagent id "${root}" instead of running commands inside it.` };
-				}
-				if (command.includes(root)) {
-					notifySourceBoundaryDiscovered(ctx, root);
-					return { block: true, reason: `Source boundary enforced: delegate to subagent id "${root}" instead of running commands inside it.` };
-				}
-			}
+			candidatePaths.push(...commandFilesystemTargets(command, bashCwd));
 		}
 
 		for (const candidate of candidatePaths) {
@@ -1038,7 +1067,8 @@ export default function (pi: ExtensionAPI) {
 		label: "Subagent",
 		description: [
 			"Delegate tasks to specialized subagents with isolated context.",
-			"Modes: single (id + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
+			"Modes: single (id + session + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
+			"Every delegation must include session: \"new\" or \"resume\"; use \"resume\" only when the previous result for that subagent said so.",
 			"Use id for behavior agents and source agents; behavior agents run from the caller cwd by default, source agents run from their source root.",
 			"Source ids are absolute or caller-cwd-relative folders containing SUBAGENTS.md; recursive source delegation to the current source root or active source stack is blocked.",
 			'Default behavior agent scope is "user" (from ~/.pi/agent/agents).',
@@ -1078,11 +1108,20 @@ export default function (pi: ExtensionAPI) {
 						},
 					],
 					details: makeDetails("single")([]),
+					isError: true,
 				};
 			}
 
 			const mode = hasChain ? "chain" : hasTasks ? "parallel" : "single";
-			const requestedDelegations = hasChain
+			const missingSessionError = getMissingSessionError(params);
+			if (missingSessionError) {
+				return {
+					content: [{ type: "text", text: missingSessionError }],
+					details: makeDetails(mode)([]),
+					isError: true,
+				};
+			}
+			const requestedDelegations: Array<{ id: string | undefined; task: string; step?: number }> = hasChain
 				? params.chain!.map((step, index) => ({ id: getAgentId(step), task: step.task, step: index + 1 }))
 				: hasTasks
 					? params.tasks!.map((task) => ({ id: getAgentId(task), task: task.task }))
@@ -1164,7 +1203,7 @@ export default function (pi: ExtensionAPI) {
 						ctx.cwd,
 						agents,
 						stepId,
-						step.session ?? "new",
+						step.session,
 						taskWithContext,
 						step.cwd,
 						i + 1,
@@ -1241,7 +1280,7 @@ export default function (pi: ExtensionAPI) {
 						ctx.cwd,
 						agents,
 						taskId,
-						t.session ?? "new",
+						t.session,
 						t.task,
 						t.cwd,
 						undefined,
@@ -1286,7 +1325,7 @@ export default function (pi: ExtensionAPI) {
 					ctx.cwd,
 					agents,
 					singleId,
-					params.session ?? "new",
+					params.session as SessionIntent,
 					params.task,
 					params.cwd,
 					undefined,
