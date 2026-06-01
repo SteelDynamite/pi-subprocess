@@ -19,10 +19,10 @@ subagent/
 ├── index.ts             # The extension (entry point)
 ├── agents.ts            # Agent discovery logic
 ├── agents/              # Sample agent definitions
-│   ├── scout.md         # Fast recon, returns compressed context
-│   ├── planner.md       # Creates implementation plans
-│   ├── reviewer.md      # Code review
-│   └── worker.md        # General-purpose (full capabilities)
+│   ├── scout/SUBAGENTS.md     # Fast recon, returns compressed context
+│   ├── planner/SUBAGENTS.md   # Creates implementation plans
+│   ├── reviewer/SUBAGENTS.md  # Code review
+│   └── worker/SUBAGENTS.md    # General-purpose (full capabilities)
 └── prompts/             # Workflow presets (prompt templates)
     ├── implement.md     # scout -> planner -> worker
     ├── scout-and-plan.md    # scout -> planner (no implementation)
@@ -41,8 +41,8 @@ ln -sf "$(pwd)/packages/coding-agent/examples/extensions/subagent/agents.ts" ~/.
 
 # Symlink agents
 mkdir -p ~/.pi/agent/agents
-for f in packages/coding-agent/examples/extensions/subagent/agents/*.md; do
-  ln -sf "$(pwd)/$f" ~/.pi/agent/agents/$(basename "$f")
+for d in packages/coding-agent/examples/extensions/subagent/agents/*; do
+  ln -sfn "$(pwd)/$d" ~/.pi/agent/agents/$(basename "$d")
 done
 
 # Symlink workflow prompts
@@ -56,7 +56,7 @@ done
 
 This tool executes a separate `pi` subprocess with a delegated system prompt and tool/model configuration.
 
-**Project-local agents** (`.pi/agents/*.md`) are repo-controlled prompts that can instruct the model to read files, run bash commands, etc.
+**Project-local behavior agents** (`.pi/agents/<id>/SUBAGENTS.md`) and **source agents** (`<source-root>/SUBAGENTS.md`) are repo-controlled prompts that can instruct the model to read files, run bash commands, etc.
 
 **Default behavior:** Only loads **user-level agents** from `~/.pi/agent/agents`.
 
@@ -92,9 +92,9 @@ Use a chain: first have scout find the read tool, then have planner suggest impr
 
 | Mode | Parameter | Description |
 |------|-----------|-------------|
-| Single | `{ agent, task }` | One agent, one task |
-| Parallel | `{ tasks: [...] }` | Multiple agents run concurrently (max 8, 4 concurrent) |
-| Chain | `{ chain: [...] }` | Sequential with `{previous}` placeholder |
+| Single | `{ id, task }` | One subagent id, one task (`agent` remains as a deprecated alias) |
+| Parallel | `{ tasks: [...] }` | Multiple `{ id, task }` tasks run concurrently (max 8, 4 concurrent) |
+| Chain | `{ chain: [...] }` | Sequential `{ id, task }` steps with `{previous}` placeholder |
 
 ## Output Display
 
@@ -124,24 +124,32 @@ Use a chain: first have scout find the read tool, then have planner suggest impr
 
 ## Agent Definitions
 
-Agents are markdown files with YAML frontmatter:
+Behavior agents are folders containing `SUBAGENTS.md`; the folder name is the id. `name` frontmatter is not supported.
 
 ```markdown
 ---
-name: my-agent
 description: What this agent does
 tools: read, grep, find, ls
-model: claude-haiku-4-5
+model: openai-codex/gpt-5.5, openai-codex/gpt-5.4-mini
+manifest: true
 ---
 
 System prompt for the agent goes here.
 ```
 
 **Locations:**
-- `~/.pi/agent/agents/*.md` - User-level (always loaded)
-- `.pi/agents/*.md` - Project-level (only with `agentScope: "project"` or `"both"`)
+- `~/.pi/agent/agents/<id>/SUBAGENTS.md` - User-level (always loaded)
+- `.pi/agents/<id>/SUBAGENTS.md` - Project-level (only with `agentScope: "project"` or `"both"`)
 
-Project agents override user agents with the same name when `agentScope: "both"`.
+Project agents override user agents with the same id when `agentScope: "both"`.
+
+## Source Agents
+
+Any descendant folder containing `SUBAGENTS.md` becomes a source-owned boundary. The manifest advertises source agents by absolute path id, unless `manifest: false` is set. Direct reads/edits/searches/commands inside those folders are blocked; delegate with `id: "/absolute/source/root"` or a cwd-relative path.
+
+`SUBAGENTS.md` also replaces same-folder `AGENTS.md` by convention. Pi may still load `AGENTS.md`; this extension injects `SUBAGENTS.md` after normal context and states that it is more specific.
+
+Only these frontmatter fields are supported: `description`, `tools`, `model`, `manifest`. If `tools` is present, it is an exact allowlist; omit it to inherit defaults. If `model` is a comma-separated list, the first configured/available model is used; otherwise the caller model is used with a warning.
 
 ## Sample Agents
 

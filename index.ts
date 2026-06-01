@@ -5,9 +5,9 @@
  * giving it an isolated context window.
  *
  * Supports three modes:
- *   - Single: { agent: "name", task: "..." }
- *   - Parallel: { tasks: [{ agent: "name", task: "..." }, ...] }
- *   - Chain: { chain: [{ agent: "name", task: "... {previous} ..." }, ...] }
+ *   - Single: { id: "name-or-source-path", task: "..." }
+ *   - Parallel: { tasks: [{ id: "name-or-source-path", task: "..." }, ...] }
+ *   - Chain: { chain: [{ id: "name-or-source-path", task: "... {previous} ..." }, ...] }
  *
  * Uses JSON mode to capture structured output from subagents.
  */
@@ -19,15 +19,45 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
 import { StringEnum } from "@earendil-works/pi-ai";
-import { type ExtensionAPI, getMarkdownTheme, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import {
+	type ExtensionAPI,
+	type ExtensionContext,
+	getMarkdownTheme,
+	withFileMutationQueue,
+} from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
+import {
+	type AgentConfig,
+	type AgentScope,
+	discoverAgents,
+	getSubagentsFileName,
+	isPathInside,
+	loadSourceAgent,
+	resolveSourceAgentId,
+	scanSourceAgents,
+} from "./agents.ts";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
 const COLLAPSED_ITEM_COUNT = 10;
 const PER_TASK_OUTPUT_CAP = 50 * 1024;
+const MAX_SUBAGENT_DEPTH = 5;
+const DEFAULT_KNOWN_TOOLS = new Set([
+	"bash",
+	"read",
+	"write",
+	"edit",
+	"ls",
+	"find",
+	"grep",
+	"rg",
+	"todo",
+	"subagent",
+]);
+
+let knownToolNames = new Set(DEFAULT_KNOWN_TOOLS);
+const notifiedSourceCwds = new Set<string>();
 
 function formatTokens(count: number): string {
 	if (count < 1000) return count.toString();
@@ -142,22 +172,25 @@ interface UsageStats {
 
 interface SingleResult {
 	agent: string;
-	agentSource: "bundled" | "user" | "project" | "unknown";
+	agentSource: "bundled" | "user" | "project" | "source" | "unknown";
 	task: string;
 	exitCode: number;
 	messages: Message[];
 	stderr: string;
 	usage: UsageStats;
 	model?: string;
+	warning?: string;
 	stopReason?: string;
 	errorMessage?: string;
 	step?: number;
+	cwd?: string;
 }
 
 interface SubagentDetails {
 	mode: "single" | "parallel" | "chain";
 	agentScope: AgentScope;
 	projectAgentsDir: string | null;
+	sourceAgents: string[];
 	results: SingleResult[];
 }
 
@@ -178,10 +211,11 @@ function isFailedResult(result: SingleResult): boolean {
 }
 
 function getResultOutput(result: SingleResult): string {
+	const warning = result.warning ? `Warning: ${result.warning}\n\n` : "";
 	if (isFailedResult(result)) {
-		return result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
+		return warning + (result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)");
 	}
-	return getFinalOutput(result.messages) || "(no output)";
+	return warning + (getFinalOutput(result.messages) || "(no output)");
 }
 
 function truncateParallelOutput(output: string): string {
@@ -208,6 +242,18 @@ function getDisplayItems(messages: Message[]): DisplayItem[] {
 		}
 	}
 	return items;
+}
+
+function getNestedSubagentIds(messages: Message[]): string[] {
+	return getDisplayItems(messages)
+		.filter((item): item is Extract<DisplayItem, { type: "toolCall" }> => item.type === "toolCall" && item.name === "subagent")
+		.flatMap((item) => {
+			const args = item.args as any;
+			if (args.chain && Array.isArray(args.chain)) return args.chain.map((step: any) => getAgentId(step)).filter(Boolean);
+			if (args.tasks && Array.isArray(args.tasks)) return args.tasks.map((task: any) => getAgentId(task)).filter(Boolean);
+			const id = getAgentId(args);
+			return id ? [id] : [];
+		});
 }
 
 async function mapWithConcurrencyLimit<TIn, TOut>(
@@ -240,6 +286,77 @@ async function writePromptToTempFile(agentName: string, prompt: string): Promise
 	return { dir: tmpDir, filePath };
 }
 
+function getAgentId(input: { id?: string; agent?: string }): string | undefined {
+	return input.id ?? input.agent;
+}
+
+function formatModelRef(model: ExtensionContext["model"]): string | undefined {
+	return model ? `${model.provider}/${model.id}` : undefined;
+}
+
+function resolveAgentModel(agent: AgentConfig, ctx: ExtensionContext): { model?: string; warning?: string } {
+	const callerModel = formatModelRef(ctx.model);
+	if (!agent.model?.trim()) return { model: callerModel };
+
+	const candidates = agent.model
+		.split(",")
+		.map((m) => m.trim())
+		.filter(Boolean);
+	const available = ctx.modelRegistry.getAvailable();
+
+	for (const candidate of candidates) {
+		const match = available.find((model) => `${model.provider}/${model.id}` === candidate || model.id === candidate);
+		if (match) return { model: `${match.provider}/${match.id}` };
+	}
+
+	return {
+		model: callerModel,
+		warning: `No configured model from "${agent.model}" for ${agent.id}; using caller model${callerModel ? ` ${callerModel}` : ""}.`,
+	};
+}
+
+function validateAgentTools(agent: AgentConfig): string | undefined {
+	if (!agent.tools) return undefined;
+	const unknown = agent.tools.filter((tool) => !knownToolNames.has(tool));
+	if (unknown.length === 0) return undefined;
+	return `${agent.filePath}: unknown tool(s): ${unknown.join(", ")}. Explicit tools must match available tool names exactly.`;
+}
+
+function escapeXml(text: string): string {
+	return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function formatSubagentManifest(agents: AgentConfig[]): string {
+	const visible = agents.filter((agent) => agent.manifest);
+	if (visible.length === 0) return "";
+	const entries = visible
+		.map(
+			(agent) =>
+				`  <subagent>\n    <id>${escapeXml(agent.id)}</id>\n    <description>${escapeXml(agent.description)}</description>\n  </subagent>`,
+		)
+		.join("\n");
+	return `<available-subagents>\n${entries}\n</available-subagents>`;
+}
+
+function resolveAgent(defaultCwd: string, agents: AgentConfig[], id: string): AgentConfig | undefined {
+	const sourceAgent = resolveSourceAgentId(defaultCwd, id);
+	if (sourceAgent) return sourceAgent;
+	return agents.find((a) => a.kind === "behavior" && a.id === id);
+}
+
+function makeErrorResult(agentId: string, task: string, message: string, step?: number): SingleResult {
+	return {
+		agent: agentId,
+		agentSource: "unknown",
+		task,
+		exitCode: 1,
+		messages: [],
+		stderr: message,
+		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+		step,
+	};
+}
+
 function getPiInvocation(args: string[]): { command: string; args: string[] } {
 	const currentScript = process.argv[1];
 	const isBunVirtualScript = currentScript?.startsWith("/$bunfs/root/");
@@ -259,9 +376,10 @@ function getPiInvocation(args: string[]): { command: string; args: string[] } {
 type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
 
 async function runSingleAgent(
+	ctx: ExtensionContext,
 	defaultCwd: string,
 	agents: AgentConfig[],
-	agentName: string,
+	agentId: string,
 	task: string,
 	cwd: string | undefined,
 	step: number | undefined,
@@ -269,39 +387,58 @@ async function runSingleAgent(
 	onUpdate: OnUpdateCallback | undefined,
 	makeDetails: (results: SingleResult[]) => SubagentDetails,
 ): Promise<SingleResult> {
-	const agent = agents.find((a) => a.name === agentName);
+	const agent = resolveAgent(defaultCwd, agents, agentId);
 
 	if (!agent) {
-		const available = agents.map((a) => `"${a.name}"`).join(", ") || "none";
-		return {
-			agent: agentName,
-			agentSource: "unknown",
-			task,
-			exitCode: 1,
-			messages: [],
-			stderr: `Unknown agent: "${agentName}". Available agents: ${available}.`,
-			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
-			step,
-		};
+		const available = agents.map((a) => `"${a.id}"`).join(", ") || "none";
+		return makeErrorResult(agentId, task, `Unknown subagent id: "${agentId}". Available subagents: ${available}.`, step);
 	}
 
+	const currentDepth = Number(process.env.PI_SUBAGENT_DEPTH ?? "0");
+	if (currentDepth >= MAX_SUBAGENT_DEPTH) {
+		return makeErrorResult(agent.id, task, `Subagent recursion limit reached (max depth ${MAX_SUBAGENT_DEPTH}).`, step);
+	}
+
+	if (agent.kind === "source" && cwd) {
+		return makeErrorResult(agent.id, task, "Invalid configuration: cwd is only supported for behavior agents.", step);
+	}
+
+	const toolError = validateAgentTools(agent);
+	if (toolError) return makeErrorResult(agent.id, task, toolError, step);
+
+	if (agent.kind === "behavior" && cwd) {
+		const sourceRoots = scanSourceAgents(defaultCwd).agents.map((sourceAgent) => sourceAgent.rootDir);
+		const blocked = sourceRoots.find((root) => isPathInside(cwd, root));
+		if (blocked) {
+			return makeErrorResult(
+				agent.id,
+				task,
+				`Source boundary enforced: use subagent id "${blocked}" instead of running behavior agent "${agent.id}" with cwd inside it.`,
+				step,
+			);
+		}
+	}
+
+	const resolvedModel = resolveAgentModel(agent, ctx);
 	const args: string[] = ["--mode", "json", "-p", "--no-session"];
-	if (agent.model) args.push("--model", agent.model);
+	if (resolvedModel.model) args.push("--model", resolvedModel.model);
 	if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
 
 	let tmpPromptDir: string | null = null;
 	let tmpPromptPath: string | null = null;
 
 	const currentResult: SingleResult = {
-		agent: agentName,
+		agent: agent.id,
 		agentSource: agent.source,
 		task,
 		exitCode: 0,
 		messages: [],
 		stderr: "",
 		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
-		model: agent.model,
+		model: resolvedModel.model,
+		warning: resolvedModel.warning,
 		step,
+		cwd: agent.kind === "source" ? agent.rootDir : cwd ?? defaultCwd,
 	};
 
 	const emitUpdate = () => {
@@ -315,7 +452,11 @@ async function runSingleAgent(
 
 	try {
 		if (agent.systemPrompt.trim()) {
-			const tmp = await writePromptToTempFile(agent.name, agent.systemPrompt);
+			const prompt =
+				agent.kind === "source"
+					? `# ${getSubagentsFileName()}\n\nThe following ${getSubagentsFileName()} is more specific than any AGENTS.md loaded from the same folder. Follow it for this source root.\n\n${agent.systemPrompt}`
+					: agent.systemPrompt;
+			const tmp = await writePromptToTempFile(agent.id, prompt);
 			tmpPromptDir = tmp.dir;
 			tmpPromptPath = tmp.filePath;
 			args.push("--append-system-prompt", tmpPromptPath);
@@ -326,8 +467,14 @@ async function runSingleAgent(
 
 		const exitCode = await new Promise<number>((resolve) => {
 			const invocation = getPiInvocation(args);
+			const childEnv = {
+				...process.env,
+				PI_SUBAGENT_DEPTH: String(currentDepth + 1),
+				...(agent.kind === "source" ? { PI_SUBAGENT_SKIP_LOCAL_SUBAGENTS: agent.rootDir } : {}),
+			};
 			const proc = spawn(invocation.command, invocation.args, {
-				cwd: cwd ?? defaultCwd,
+				cwd: agent.kind === "source" ? agent.rootDir : cwd ?? defaultCwd,
+				env: childEnv,
 				shell: false,
 				stdio: ["ignore", "pipe", "pipe"],
 			});
@@ -423,15 +570,17 @@ async function runSingleAgent(
 }
 
 const TaskItem = Type.Object({
-	agent: Type.String({ description: "Name of the agent to invoke" }),
+	id: Type.Optional(Type.String({ description: "Subagent id to invoke" })),
+	agent: Type.Optional(Type.String({ description: "Deprecated alias for id" })),
 	task: Type.String({ description: "Task to delegate to the agent" }),
-	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
+	cwd: Type.Optional(Type.String({ description: "Working directory for behavior agent processes" })),
 });
 
 const ChainItem = Type.Object({
-	agent: Type.String({ description: "Name of the agent to invoke" }),
+	id: Type.Optional(Type.String({ description: "Subagent id to invoke" })),
+	agent: Type.Optional(Type.String({ description: "Deprecated alias for id" })),
 	task: Type.String({ description: "Task with optional {previous} placeholder for prior output" }),
-	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
+	cwd: Type.Optional(Type.String({ description: "Working directory for behavior agent processes" })),
 });
 
 const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
@@ -440,26 +589,108 @@ const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
 });
 
 const SubagentParams = Type.Object({
-	agent: Type.Optional(Type.String({ description: "Name of the agent to invoke (for single mode)" })),
+	id: Type.Optional(Type.String({ description: "Subagent id to invoke (for single mode)" })),
+	agent: Type.Optional(Type.String({ description: "Deprecated alias for id (single mode)" })),
 	task: Type.Optional(Type.String({ description: "Task to delegate (for single mode)" })),
-	tasks: Type.Optional(Type.Array(TaskItem, { description: "Array of {agent, task} for parallel execution" })),
-	chain: Type.Optional(Type.Array(ChainItem, { description: "Array of {agent, task} for sequential execution" })),
+	tasks: Type.Optional(Type.Array(TaskItem, { description: "Array of {id, task} for parallel execution" })),
+	chain: Type.Optional(Type.Array(ChainItem, { description: "Array of {id, task} for sequential execution" })),
 	agentScope: Type.Optional(AgentScopeSchema),
 	confirmProjectAgents: Type.Optional(
 		Type.Boolean({ description: "Prompt before running project-local agents. Default: true.", default: true }),
 	),
-	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process (single mode)" })),
+	cwd: Type.Optional(Type.String({ description: "Working directory for behavior agent process (single mode)" })),
 });
 
 export default function (pi: ExtensionAPI) {
+	pi.on("before_agent_start", async (event, ctx) => {
+		knownToolNames = new Set([
+			...DEFAULT_KNOWN_TOOLS,
+			...Object.keys(event.systemPromptOptions.toolSnippets ?? {}),
+			...(event.systemPromptOptions.selectedTools ?? []),
+		]);
+
+		const discovery = discoverAgents(ctx.cwd, "user");
+		const manifest = formatSubagentManifest(discovery.agents);
+		const promptParts: string[] = [];
+
+		if (manifest) {
+			promptParts.push(
+				`Subagents can be delegated to with the subagent tool by id. Source subagent ids are source-owned boundaries; do not read, search, edit, or run commands inside those folders directly from this agent.\n\n${manifest}`,
+			);
+		}
+
+		const skipLocalSubagents = process.env.PI_SUBAGENT_SKIP_LOCAL_SUBAGENTS;
+		if (!skipLocalSubagents || path.resolve(skipLocalSubagents) !== path.resolve(ctx.cwd)) {
+			const local = loadSourceAgent(ctx.cwd, { readBody: true });
+			if (local.agent) {
+				promptParts.push(
+					`# ${getSubagentsFileName()}\n\nThe following ${getSubagentsFileName()} is more specific than any AGENTS.md loaded from the same folder. Follow it for this source root.\n\n${local.agent.systemPrompt}`,
+				);
+			}
+		}
+
+		const configErrors = [...discovery.errors, ...discovery.agents.map(validateAgentTools).filter((error): error is string => Boolean(error))];
+		if (configErrors.length > 0) {
+			promptParts.push(`Subagent configuration errors:\n${configErrors.map((error) => `- ${error}`).join("\n")}`);
+		}
+
+		if (discovery.sourceAgents.length > 0 && ctx.hasUI && !notifiedSourceCwds.has(ctx.cwd)) {
+			notifiedSourceCwds.add(ctx.cwd);
+			ctx.ui.notify(`Source subagents detected: ${discovery.sourceAgents.map((agent) => agent.id).join(", ")}`, "info");
+		}
+
+		if (promptParts.length === 0) return;
+		return { systemPrompt: `${event.systemPrompt}\n\n${promptParts.join("\n\n")}` };
+	});
+
+	pi.on("tool_call", async (event, ctx) => {
+		if (event.toolName === "subagent") return;
+		const sourceRoots = scanSourceAgents(ctx.cwd).agents.map((agent) => agent.rootDir);
+		if (sourceRoots.length === 0) return;
+
+		const input = (event.input ?? {}) as Record<string, unknown>;
+		const pathKeys = ["path", "file_path", "filePath", "cwd", "dir", "directory", "root", "rootDir"];
+		const candidatePaths: string[] = [];
+		for (const key of pathKeys) {
+			const value = input[key];
+			if (typeof value === "string" && value.trim()) candidatePaths.push(path.resolve(ctx.cwd, value));
+		}
+
+		if (event.toolName === "bash") {
+			const bashCwd = typeof input.cwd === "string" ? path.resolve(ctx.cwd, input.cwd) : ctx.cwd;
+			candidatePaths.push(bashCwd);
+			const command = typeof input.command === "string" ? input.command : "";
+			for (const root of sourceRoots) {
+				const rel = path.relative(ctx.cwd, root);
+				if (!rel.startsWith("..") && !path.isAbsolute(rel) && rel && command.includes(rel)) {
+					return { block: true, reason: `Source boundary enforced: delegate to subagent id "${root}" instead of running commands inside it.` };
+				}
+				if (command.includes(root)) {
+					return { block: true, reason: `Source boundary enforced: delegate to subagent id "${root}" instead of running commands inside it.` };
+				}
+			}
+		}
+
+		for (const candidate of candidatePaths) {
+			const root = sourceRoots.find((sourceRoot) => isPathInside(candidate, sourceRoot));
+			if (root) {
+				return {
+					block: true,
+					reason: `Source boundary enforced: delegate to subagent id "${root}" instead of accessing it directly.`,
+				};
+			}
+		}
+	});
+
 	pi.registerTool({
 		name: "subagent",
 		label: "Subagent",
 		description: [
 			"Delegate tasks to specialized subagents with isolated context.",
-			"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
-			'Default agent scope is "user" (from ~/.pi/agent/agents).',
-			'To enable project-local agents in .pi/agents, set agentScope: "both" (or "project").',
+			"Modes: single (id + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
+			"Behavior ids are names; source ids are absolute or cwd-relative folders containing SUBAGENTS.md.",
+			'Default behavior agent scope is "user" (from ~/.pi/agent/agents).',
+			'To enable project-local behavior agents in .pi/agents, set agentScope: "both" (or "project").',
 		].join(" "),
 		parameters: SubagentParams,
 
@@ -471,7 +702,8 @@ export default function (pi: ExtensionAPI) {
 
 			const hasChain = (params.chain?.length ?? 0) > 0;
 			const hasTasks = (params.tasks?.length ?? 0) > 0;
-			const hasSingle = Boolean(params.agent && params.task);
+			const singleId = getAgentId(params);
+			const hasSingle = Boolean(singleId && params.task);
 			const modeCount = Number(hasChain) + Number(hasTasks) + Number(hasSingle);
 
 			const makeDetails =
@@ -480,11 +712,12 @@ export default function (pi: ExtensionAPI) {
 					mode,
 					agentScope,
 					projectAgentsDir: discovery.projectAgentsDir,
+					sourceAgents: discovery.sourceAgents.map((agent) => agent.id),
 					results,
 				});
 
 			if (modeCount !== 1) {
-				const available = agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";
+				const available = agents.map((a) => `${a.id} (${a.source})`).join(", ") || "none";
 				return {
 					content: [
 						{
@@ -497,17 +730,17 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if ((agentScope === "project" || agentScope === "both") && confirmProjectAgents && ctx.hasUI) {
-				const requestedAgentNames = new Set<string>();
-				if (params.chain) for (const step of params.chain) requestedAgentNames.add(step.agent);
-				if (params.tasks) for (const t of params.tasks) requestedAgentNames.add(t.agent);
-				if (params.agent) requestedAgentNames.add(params.agent);
+				const requestedAgentIds = new Set<string>();
+				if (params.chain) for (const step of params.chain) requestedAgentIds.add(getAgentId(step) ?? "");
+				if (params.tasks) for (const t of params.tasks) requestedAgentIds.add(getAgentId(t) ?? "");
+				if (singleId) requestedAgentIds.add(singleId);
 
-				const projectAgentsRequested = Array.from(requestedAgentNames)
-					.map((name) => agents.find((a) => a.name === name))
+				const projectAgentsRequested = Array.from(requestedAgentIds)
+					.map((id) => agents.find((a) => a.id === id))
 					.filter((a): a is AgentConfig => a?.source === "project");
 
 				if (projectAgentsRequested.length > 0) {
-					const names = projectAgentsRequested.map((a) => a.name).join(", ");
+					const names = projectAgentsRequested.map((a) => a.id).join(", ");
 					const dir = discovery.projectAgentsDir ?? "(unknown)";
 					const ok = await ctx.ui.confirm(
 						"Run project-local agents?",
@@ -527,6 +760,14 @@ export default function (pi: ExtensionAPI) {
 
 				for (let i = 0; i < params.chain.length; i++) {
 					const step = params.chain[i];
+					const stepId = getAgentId(step);
+					if (!stepId) {
+						return {
+							content: [{ type: "text", text: `Chain stopped at step ${i + 1}: missing subagent id.` }],
+							details: makeDetails("chain")(results),
+							isError: true,
+						};
+					}
 					const taskWithContext = step.task.replace(/\{previous\}/g, previousOutput);
 
 					// Create update callback that includes all previous results
@@ -545,9 +786,10 @@ export default function (pi: ExtensionAPI) {
 						: undefined;
 
 					const result = await runSingleAgent(
+						ctx,
 						ctx.cwd,
 						agents,
-						step.agent,
+						stepId,
 						taskWithContext,
 						step.cwd,
 						i + 1,
@@ -561,7 +803,7 @@ export default function (pi: ExtensionAPI) {
 					if (isError) {
 						const errorMsg = getResultOutput(result);
 						return {
-							content: [{ type: "text", text: `Chain stopped at step ${i + 1} (${step.agent}): ${errorMsg}` }],
+							content: [{ type: "text", text: `Chain stopped at step ${i + 1} (${stepId}): ${errorMsg}` }],
 							details: makeDetails("chain")(results),
 							isError: true,
 						};
@@ -569,7 +811,7 @@ export default function (pi: ExtensionAPI) {
 					previousOutput = getFinalOutput(result.messages);
 				}
 				return {
-					content: [{ type: "text", text: getFinalOutput(results[results.length - 1].messages) || "(no output)" }],
+					content: [{ type: "text", text: getResultOutput(results[results.length - 1]) }],
 					details: makeDetails("chain")(results),
 				};
 			}
@@ -592,7 +834,7 @@ export default function (pi: ExtensionAPI) {
 				// Initialize placeholder results
 				for (let i = 0; i < params.tasks.length; i++) {
 					allResults[i] = {
-						agent: params.tasks[i].agent,
+						agent: getAgentId(params.tasks[i]) ?? "(missing id)",
 						agentSource: "unknown",
 						task: params.tasks[i].task,
 						exitCode: -1, // -1 = still running
@@ -616,10 +858,13 @@ export default function (pi: ExtensionAPI) {
 				};
 
 				const results = await mapWithConcurrencyLimit(params.tasks, MAX_CONCURRENCY, async (t, index) => {
+					const taskId = getAgentId(t);
+					if (!taskId) return makeErrorResult("(missing id)", t.task, "Missing subagent id.");
 					const result = await runSingleAgent(
+						ctx,
 						ctx.cwd,
 						agents,
-						t.agent,
+						taskId,
 						t.task,
 						t.cwd,
 						undefined,
@@ -657,11 +902,12 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
-			if (params.agent && params.task) {
+			if (singleId && params.task) {
 				const result = await runSingleAgent(
+					ctx,
 					ctx.cwd,
 					agents,
-					params.agent,
+					singleId,
 					params.task,
 					params.cwd,
 					undefined,
@@ -679,12 +925,12 @@ export default function (pi: ExtensionAPI) {
 					};
 				}
 				return {
-					content: [{ type: "text", text: getFinalOutput(result.messages) || "(no output)" }],
+					content: [{ type: "text", text: getResultOutput(result) }],
 					details: makeDetails("single")([result]),
 				};
 			}
 
-			const available = agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";
+			const available = agents.map((a) => `${a.id} (${a.source})`).join(", ") || "none";
 			return {
 				content: [{ type: "text", text: `Invalid parameters. Available agents: ${available}` }],
 				details: makeDetails("single")([]),
@@ -707,7 +953,7 @@ export default function (pi: ExtensionAPI) {
 						"\n  " +
 						theme.fg("muted", `${i + 1}.`) +
 						" " +
-						theme.fg("accent", step.agent) +
+						theme.fg("accent", getAgentId(step) ?? "...") +
 						theme.fg("dim", ` ${preview}`);
 				}
 				if (args.chain.length > 3) text += `\n  ${theme.fg("muted", `... +${args.chain.length - 3} more`)}`;
@@ -720,12 +966,12 @@ export default function (pi: ExtensionAPI) {
 					theme.fg("muted", ` [${scope}]`);
 				for (const t of args.tasks.slice(0, 3)) {
 					const preview = t.task.length > 40 ? `${t.task.slice(0, 40)}...` : t.task;
-					text += `\n  ${theme.fg("accent", t.agent)}${theme.fg("dim", ` ${preview}`)}`;
+					text += `\n  ${theme.fg("accent", getAgentId(t) ?? "...")}${theme.fg("dim", ` ${preview}`)}`;
 				}
 				if (args.tasks.length > 3) text += `\n  ${theme.fg("muted", `... +${args.tasks.length - 3} more`)}`;
 				return new Text(text, 0, 0);
 			}
-			const agentName = args.agent || "...";
+			const agentName = getAgentId(args) || "...";
 			const preview = args.task ? (args.task.length > 60 ? `${args.task.slice(0, 60)}...` : args.task) : "...";
 			let text =
 				theme.fg("toolTitle", theme.bold("subagent ")) +
@@ -772,6 +1018,10 @@ export default function (pi: ExtensionAPI) {
 					let header = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}`;
 					if (isError && r.stopReason) header += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
 					container.addChild(new Text(header, 0, 0));
+					const nestedIds = getNestedSubagentIds(r.messages);
+					if (nestedIds.length > 0)
+						container.addChild(new Text(theme.fg("dim", `Nested: ${nestedIds.map((id) => `${r.agent} > ${id}`).join(", ")}`), 0, 0));
+					if (r.warning) container.addChild(new Text(theme.fg("warning", `Warning: ${r.warning}`), 0, 0));
 					if (isError && r.errorMessage)
 						container.addChild(new Text(theme.fg("error", `Error: ${r.errorMessage}`), 0, 0));
 					container.addChild(new Spacer(1));
@@ -805,8 +1055,11 @@ export default function (pi: ExtensionAPI) {
 					return container;
 				}
 
+				const nestedIds = getNestedSubagentIds(r.messages);
 				let text = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}`;
+				if (nestedIds.length > 0) text += theme.fg("dim", ` +${nestedIds.length} nested`);
 				if (isError && r.stopReason) text += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
+				if (r.warning) text += `\n${theme.fg("warning", `Warning: ${r.warning}`)}`;
 				if (isError && r.errorMessage) text += `\n${theme.fg("error", `Error: ${r.errorMessage}`)}`;
 				else if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
 				else {
