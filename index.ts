@@ -286,12 +286,13 @@ interface SubagentDetails {
 	results: SingleResult[];
 }
 
-function getFinalOutput(messages: Message[]): string {
+export function getFinalOutput(messages: Message[]): string {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const msg = messages[i];
 		if (msg.role === "assistant") {
-			for (const part of msg.content) {
-				if (part.type === "text") return part.text;
+			for (let j = msg.content.length - 1; j >= 0; j--) {
+				const part = msg.content[j];
+				if (part.type === "text" && part.text.trim() !== "") return part.text;
 			}
 		}
 	}
@@ -1021,7 +1022,7 @@ export default function (pi: ExtensionAPI) {
 
 		if (manifest) {
 			promptParts.push(
-				`Subagents can be delegated to with the subagent tool by id and required session intent ("new" or "resume"). Use session: "new" for a first/fresh call; use session: "resume" only when the previous result for that same subagent said to. Source subagent ids are source-owned boundaries; do not read, search, edit, or run commands inside those folders directly from this agent. Do not delegate a source agent to its own current source root or an active source ancestor; the tool blocks recursive source loops.\n\n${manifest}`,
+				`Subagents can be delegated to with the subagent tool by id and required session intent ("new" or "resume"). Use session: "new" for a first/fresh call; use session: "resume" only when the previous result for that same subagent said to. Source subagent ids are source-owned boundaries; by default, do not read, search, edit, or run commands inside those folders directly from this agent. If the user explicitly authorizes direct access for a specific source root and task, direct access is allowed for that user request only. Do not delegate a source agent to its own current source root or an active source ancestor; the tool blocks recursive source loops.\n\n${manifest}`,
 			);
 		}
 
@@ -1087,7 +1088,7 @@ export default function (pi: ExtensionAPI) {
 			"Modes: single (id + session + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
 			"Every delegation must include session: \"new\" or \"resume\"; use \"resume\" only when the previous result for that subagent said so.",
 			"Use id for behavior agents and source agents; behavior agents run from the caller cwd by default, source agents run from their source root.",
-			"Source ids are absolute or caller-cwd-relative folders containing SUBAGENTS.md; recursive source delegation to the current source root or active source stack is blocked.",
+			"Source ids are absolute or caller-cwd-relative folders containing SUBAGENTS.md; direct access is allowed only when the user explicitly authorizes it for the current request; recursive source delegation to the current source root or active source stack is blocked.",
 			'Default behavior agent scope is "user" (from ~/.pi/agent/agents).',
 			'To enable project-local behavior agents in .pi/agents, set agentScope: "both" (or "project").',
 		].join(" "),
