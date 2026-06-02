@@ -259,10 +259,18 @@ interface PersistedSubagentState {
 	sessions: TrackedSession[];
 }
 
+interface WrongSessionIntentError {
+	agentId: string;
+	requested: SessionIntent;
+	required: SessionIntent;
+	recommendedRetry: string;
+}
+
 interface SingleResult {
 	agent: string;
 	agentSource: "bundled" | "user" | "project" | "source" | "unknown";
 	sessionIntent?: SessionIntent;
+	wrongSessionIntent?: WrongSessionIntentError;
 	task: string;
 	exitCode: number;
 	messages: Message[];
@@ -546,15 +554,24 @@ function commandFilesystemTargets(command: string, cwd: string): string[] {
 	return targets;
 }
 
-function makeErrorResult(agentId: string, task: string, message: string, step?: number, sessionIntent?: SessionIntent): SingleResult {
+function makeErrorResult(
+	agentId: string,
+	task: string,
+	message: string,
+	step?: number,
+	sessionIntent?: SessionIntent,
+	extra: Partial<Pick<SingleResult, "agentSource" | "errorMessage" | "wrongSessionIntent">> = {},
+): SingleResult {
 	return {
 		agent: agentId,
-		agentSource: "unknown",
+		agentSource: extra.agentSource ?? "unknown",
 		sessionIntent,
+		wrongSessionIntent: extra.wrongSessionIntent,
 		task,
 		exitCode: 1,
 		messages: [],
 		stderr: message,
+		errorMessage: extra.errorMessage,
 		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
 		step,
 	};
@@ -658,12 +675,19 @@ function getRequiredSessionIntent(ctx: ExtensionContext, agent: AgentConfig): { 
 	return { intent: record.nextIntent, reason: record.reason, record };
 }
 
+function getWrongIntentRetry(required: SessionIntent, reason: NextIntentReason): string {
+	return reason === "over-threshold"
+		? `Retry with session: "${required}" and craft a fresh-session task prompt.`
+		: `Retry with session: "${required}".`;
+}
+
 function formatWrongIntentReason(agent: AgentConfig, requested: SessionIntent, required: SessionIntent, reason: NextIntentReason): string {
-	if (!agent.resumable) return `Wrong session intent for "${agent.id}": requested "${requested}", but this subagent is not resumable and requires session: "new".`;
-	if (reason === "reuse-disabled") return `Wrong session intent for "${agent.id}": requested "${requested}", but resumable session reuse is disabled and requires session: "new".`;
-	if (reason === "over-threshold") return `Wrong session intent for "${agent.id}": requested "${requested}", but the source session is over the context limit and requires session: "new". Craft a fresh-session task prompt.`;
-	if (reason === "none") return `Wrong session intent for "${agent.id}": requested "${requested}", but no prior reusable session exists; use session: "new".`;
-	return `Wrong session intent for "${agent.id}": requested "${requested}", but the next required session intent is "${required}".`;
+	const retry = getWrongIntentRetry(required, reason);
+	if (!agent.resumable) return `Wrong session intent for "${agent.id}": requested "${requested}", required "new" because this subagent is not resumable. ${retry}`;
+	if (reason === "reuse-disabled") return `Wrong session intent for "${agent.id}": requested "${requested}", required "new" because resumable session reuse is disabled. ${retry}`;
+	if (reason === "over-threshold") return `Wrong session intent for "${agent.id}": requested "${requested}", required "new" because the source session is over the context limit. ${retry}`;
+	if (reason === "none") return `Wrong session intent for "${agent.id}": requested "${requested}", required "new" because no prior reusable session exists. ${retry}`;
+	return `Wrong session intent for "${agent.id}": requested "${requested}", required "${required}". ${retry}`;
 }
 
 function updateTrackedSession(ctx: ExtensionContext, agent: AgentConfig, sessionId: string | undefined, result: SingleResult) {
@@ -736,12 +760,17 @@ async function runSingleAgent(
 
 	const requiredSession = getRequiredSessionIntent(ctx, agent);
 	if (session !== requiredSession.intent) {
+		const retry = getWrongIntentRetry(requiredSession.intent, requiredSession.reason);
 		return makeErrorResult(
 			agent.id,
 			task,
 			formatWrongIntentReason(agent, session, requiredSession.intent, requiredSession.reason),
 			step,
 			session,
+			{
+				agentSource: agent.source,
+				wrongSessionIntent: { agentId: agent.id, requested: session, required: requiredSession.intent, recommendedRetry: retry },
+			},
 		);
 	}
 
@@ -1447,6 +1476,18 @@ export default function (pi: ExtensionAPI) {
 				return text.trimEnd();
 			};
 
+			const renderWrongSessionIntent = (r: SingleResult) => {
+				const wrong = r.wrongSessionIntent;
+				if (!wrong) return undefined;
+				return [
+					"Wrong session intent",
+					`Subagent: ${wrong.agentId}`,
+					`Requested: session:${wrong.requested}`,
+					`Required: session:${wrong.required}`,
+					`Retry: ${wrong.recommendedRetry}`,
+				].join("\n");
+			};
+
 			if (details.mode === "single" && details.results.length === 1) {
 				const r = details.results[0];
 				const isError = isFailedResult(r);
@@ -1463,7 +1504,9 @@ export default function (pi: ExtensionAPI) {
 					if (nestedIds.length > 0)
 						container.addChild(new Text(theme.fg("dim", `Nested: ${nestedIds.map((id) => `${r.agent} > ${id}`).join(", ")}`), 0, 0));
 					if (r.warning) container.addChild(new Text(theme.fg("warning", `Warning: ${r.warning}`), 0, 0));
-					if (isError && r.errorMessage)
+					const wrongSessionText = renderWrongSessionIntent(r);
+					if (wrongSessionText) container.addChild(new Text(theme.fg("error", wrongSessionText), 0, 0));
+					else if (isError && r.errorMessage)
 						container.addChild(new Text(theme.fg("error", `Error: ${r.errorMessage}`), 0, 0));
 					container.addChild(new Spacer(1));
 					container.addChild(new Text(theme.fg("muted", "─── Task ───"), 0, 0));
@@ -1501,7 +1544,9 @@ export default function (pi: ExtensionAPI) {
 				if (nestedIds.length > 0) text += theme.fg("dim", ` +${nestedIds.length} nested`);
 				if (isError && r.stopReason) text += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
 				if (r.warning) text += `\n${theme.fg("warning", `Warning: ${r.warning}`)}`;
-				if (isError && r.errorMessage) text += `\n${theme.fg("error", `Error: ${r.errorMessage}`)}`;
+				const wrongSessionText = renderWrongSessionIntent(r);
+				if (wrongSessionText) text += `\n${theme.fg("error", wrongSessionText)}`;
+				else if (isError && r.errorMessage) text += `\n${theme.fg("error", `Error: ${r.errorMessage}`)}`;
 				else if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
 				else {
 					text += `\n${renderDisplayItems(displayItems, COLLAPSED_ITEM_COUNT)}`;
@@ -1556,6 +1601,8 @@ export default function (pi: ExtensionAPI) {
 							),
 						);
 						container.addChild(new Text(theme.fg("muted", "Task: ") + theme.fg("dim", r.task), 0, 0));
+						const wrongSessionText = renderWrongSessionIntent(r);
+						if (wrongSessionText) container.addChild(new Text(theme.fg("error", wrongSessionText), 0, 0));
 
 						// Show tool calls
 						for (const item of displayItems) {
@@ -1598,7 +1645,9 @@ export default function (pi: ExtensionAPI) {
 					const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
 					const displayItems = getDisplayItems(r.messages);
 					text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)}${formatResultSession(r)} ${rIcon}`;
-					if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
+					const wrongSessionText = renderWrongSessionIntent(r);
+					if (wrongSessionText) text += `\n${theme.fg("error", wrongSessionText)}`;
+					else if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
 					else text += `\n${renderDisplayItems(displayItems, 5)}`;
 				}
 				const usageStr = formatUsageStats(aggregateUsage(details.results));
@@ -1641,6 +1690,8 @@ export default function (pi: ExtensionAPI) {
 							new Text(`${theme.fg("muted", "─── ") + theme.fg("accent", r.agent)}${formatResultSession(r)} ${rIcon}`, 0, 0),
 						);
 						container.addChild(new Text(theme.fg("muted", "Task: ") + theme.fg("dim", r.task), 0, 0));
+						const wrongSessionText = renderWrongSessionIntent(r);
+						if (wrongSessionText) container.addChild(new Text(theme.fg("error", wrongSessionText), 0, 0));
 
 						// Show tool calls
 						for (const item of displayItems) {
@@ -1684,7 +1735,9 @@ export default function (pi: ExtensionAPI) {
 								: theme.fg("success", "✓");
 					const displayItems = getDisplayItems(r.messages);
 					text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)}${formatResultSession(r)} ${rIcon}`;
-					if (displayItems.length === 0)
+					const wrongSessionText = renderWrongSessionIntent(r);
+					if (wrongSessionText) text += `\n${theme.fg("error", wrongSessionText)}`;
+					else if (displayItems.length === 0)
 						text += `\n${theme.fg("muted", r.exitCode === -1 ? "(running...)" : "(no output)")}`;
 					else text += `\n${renderDisplayItems(displayItems, 5)}`;
 				}
