@@ -76,6 +76,19 @@ function getSessionRecordKey(ctx: ExtensionContext, agentId: string): string {
 	return `${getMainSessionKey(ctx)}\0${agentId}`;
 }
 
+function formatLocalSourcePrompt(ctx: ExtensionContext, systemPromptOptions: { contextFiles?: Array<{ path: string; content: string }> } | undefined, subagentsPath: string, content: string): string {
+	const hasSameFolderContext = systemPromptOptions?.contextFiles?.some((file) => {
+		const basename = path.basename(file.path).toLowerCase();
+		return path.resolve(path.dirname(file.path)) === path.resolve(ctx.cwd) && (basename === "agents.md" || basename === "claude.md");
+	}) ?? false;
+
+	if (!hasSameFolderContext) {
+		return `<project_context>\n\nProject-specific instructions and guidelines:\n\n<project_instructions path="${subagentsPath}">\n${content}\n</project_instructions>\n\n</project_context>`;
+	}
+
+	return `# ${getSubagentsFileName()}\n\nThe following ${getSubagentsFileName()} is more specific than any AGENTS.md loaded from the same folder. Follow it for this source root.\n\n${content}`;
+}
+
 function restoreSubagentState(ctx: ExtensionContext) {
 	const branchEntries = ctx.sessionManager.getBranch();
 	let latest: PersistedSubagentState | undefined;
@@ -1010,9 +1023,7 @@ export default function (pi: ExtensionAPI) {
 		if (!skipLocalSubagents || path.resolve(skipLocalSubagents) !== path.resolve(ctx.cwd)) {
 			const local = loadSourceAgent(ctx.cwd, { readBody: true });
 			if (local.agent) {
-				promptParts.push(
-					`# ${getSubagentsFileName()}\n\nThe following ${getSubagentsFileName()} is more specific than any AGENTS.md loaded from the same folder. Follow it for this source root.\n\n${local.agent.systemPrompt}`,
-				);
+				promptParts.push(formatLocalSourcePrompt(ctx, event.systemPromptOptions, path.join(path.resolve(ctx.cwd), getSubagentsFileName()), local.agent.systemPrompt));
 			}
 		}
 

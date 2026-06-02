@@ -154,7 +154,7 @@ Project agents override user agents with the same id when `agentScope: "both"`.
 
 Any descendant folder containing `SUBAGENTS.md` becomes a source-owned boundary. The manifest advertises source agents by absolute path id, unless `manifest: false` is set. Direct reads/edits/searches/commands inside those folders are blocked; delegate with `id: "/absolute/source/root"` or a caller-cwd-relative path. The source root from `id` is used as the subagent cwd. Source agents cannot delegate to their own current source root or another source root already in the delegation stack. Source agents do not trigger a startup notification; boundary messages appear only when direct access is blocked during use.
 
-`SUBAGENTS.md` also replaces same-folder `AGENTS.md` by convention. Pi may still load `AGENTS.md`; this extension injects `SUBAGENTS.md` after normal context and states that it is more specific.
+`SUBAGENTS.md` also replaces same-folder `AGENTS.md` by convention. When Pi starts in a source-agent folder with `SUBAGENTS.md` but no same-folder `AGENTS.md` or `CLAUDE.md`, this extension injects `SUBAGENTS.md` in the same project-context shape Pi uses for context files. If same-folder context already exists, the extension injects `SUBAGENTS.md` after normal context and states that it is more specific.
 
 Only these frontmatter fields are supported: `description`, `tools`, `model`, `manifest`, `resumable`. If `tools` is present, it is an exact allowlist; omit it to inherit defaults. If `model` is a comma-separated list, the first configured/available model is used; otherwise the caller model is used with a warning. `resumable` defaults to `false` for behavior agents and `true` for source agents.
 
