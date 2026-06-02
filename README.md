@@ -105,12 +105,13 @@ Working directory defaults:
 ## Output Display
 
 **Collapsed view** (default):
-- Status icon (✓/✗/⏳) and agent name
+- Status icon (✓/✗/⏳), agent name, and session intent (`new`/`resume`)
 - Last 5-10 items (tool calls and text)
 - Usage stats: `3 turns ↑input ↓output RcacheRead WcacheWrite $cost ctx:contextTokens model`
 
 **Expanded view** (Ctrl+O):
 - Full task text
+- Agent/status metadata including session intent
 - All tool calls with formatted arguments
 - Final output rendered as Markdown
 - Per-task usage (for chain/parallel)

@@ -262,6 +262,7 @@ interface PersistedSubagentState {
 interface SingleResult {
 	agent: string;
 	agentSource: "bundled" | "user" | "project" | "source" | "unknown";
+	sessionIntent?: SessionIntent;
 	task: string;
 	exitCode: number;
 	messages: Message[];
@@ -544,10 +545,11 @@ function commandFilesystemTargets(command: string, cwd: string): string[] {
 	return targets;
 }
 
-function makeErrorResult(agentId: string, task: string, message: string, step?: number): SingleResult {
+function makeErrorResult(agentId: string, task: string, message: string, step?: number, sessionIntent?: SessionIntent): SingleResult {
 	return {
 		agent: agentId,
 		agentSource: "unknown",
+		sessionIntent,
 		task,
 		exitCode: 1,
 		messages: [],
@@ -704,16 +706,16 @@ async function runSingleAgent(
 
 	if (!agent) {
 		const available = agents.map((a) => `"${a.id}"`).join(", ") || "none";
-		return makeErrorResult(agentId, task, `Unknown subagent id: "${agentId}". Available subagents: ${available}.`, step);
+		return makeErrorResult(agentId, task, `Unknown subagent id: "${agentId}". Available subagents: ${available}.`, step, session);
 	}
 
 	const currentDepth = Number(process.env.PI_SUBAGENT_DEPTH ?? "0");
 	if (currentDepth >= MAX_SUBAGENT_DEPTH) {
-		return makeErrorResult(agent.id, task, `Subagent recursion limit reached (max depth ${MAX_SUBAGENT_DEPTH}).`, step);
+		return makeErrorResult(agent.id, task, `Subagent recursion limit reached (max depth ${MAX_SUBAGENT_DEPTH}).`, step, session);
 	}
 
 	const sourceLoopError = getSourceLoopError(agent);
-	if (sourceLoopError) return makeErrorResult(agent.id, task, sourceLoopError, step);
+	if (sourceLoopError) return makeErrorResult(agent.id, task, sourceLoopError, step, session);
 
 	const requestedCwd = resolveOptionalCwd(defaultCwd, cwd);
 	const effectiveCwd = agent.kind === "source" ? agent.rootDir : requestedCwd ?? defaultCwd;
@@ -724,11 +726,12 @@ async function runSingleAgent(
 			task,
 			`Invalid configuration: source agent "${agent.id}" runs from its source root. Omit cwd or use the same path (${agent.rootDir}).`,
 			step,
+			session,
 		);
 	}
 
 	const toolError = validateAgentTools(agent);
-	if (toolError) return makeErrorResult(agent.id, task, toolError, step);
+	if (toolError) return makeErrorResult(agent.id, task, toolError, step, session);
 
 	const requiredSession = getRequiredSessionIntent(ctx, agent);
 	if (session !== requiredSession.intent) {
@@ -737,6 +740,7 @@ async function runSingleAgent(
 			task,
 			formatWrongIntentReason(agent, session, requiredSession.intent, requiredSession.reason),
 			step,
+			session,
 		);
 	}
 
@@ -750,6 +754,7 @@ async function runSingleAgent(
 				task,
 				`Source boundary enforced: use subagent id "${blocked}" instead of running behavior agent "${agent.id}" with cwd inside it.`,
 				step,
+				session,
 			);
 		}
 	}
@@ -772,6 +777,7 @@ async function runSingleAgent(
 	const currentResult: SingleResult = {
 		agent: agent.id,
 		agentSource: agent.source,
+		sessionIntent: session,
 		task,
 		exitCode: 0,
 		messages: [],
@@ -1132,18 +1138,18 @@ export default function (pi: ExtensionAPI) {
 					isError: true,
 				};
 			}
-			const requestedDelegations: Array<{ id: string | undefined; task: string; step?: number }> = hasChain
-				? params.chain!.map((step, index) => ({ id: getAgentId(step), task: step.task, step: index + 1 }))
+			const requestedDelegations: Array<{ id: string | undefined; session?: SessionIntent; task: string; step?: number }> = hasChain
+				? params.chain!.map((step, index) => ({ id: getAgentId(step), session: step.session, task: step.task, step: index + 1 }))
 				: hasTasks
-					? params.tasks!.map((task) => ({ id: getAgentId(task), task: task.task }))
-					: [{ id: singleId, task: params.task ?? "" }];
+					? params.tasks!.map((task) => ({ id: getAgentId(task), session: task.session, task: task.task }))
+					: [{ id: singleId, session: params.session, task: params.task ?? "" }];
 			for (const requested of requestedDelegations) {
 				if (!requested.id) continue;
 				const agent = resolveAgent(ctx.cwd, agents, requested.id);
 				if (!agent) continue;
 				const sourceLoopError = getSourceLoopError(agent);
 				if (sourceLoopError) {
-					const result = makeErrorResult(agent.id, requested.task, sourceLoopError, requested.step);
+					const result = makeErrorResult(agent.id, requested.task, sourceLoopError, requested.step, requested.session);
 					return {
 						content: [{ type: "text", text: sourceLoopError }],
 						details: makeDetails(mode)([result]),
@@ -1261,6 +1267,7 @@ export default function (pi: ExtensionAPI) {
 					allResults[i] = {
 						agent: getAgentId(params.tasks[i]) ?? "(missing id)",
 						agentSource: "unknown",
+						sessionIntent: params.tasks[i].session,
 						task: params.tasks[i].task,
 						exitCode: -1, // -1 = still running
 						messages: [],
@@ -1284,7 +1291,7 @@ export default function (pi: ExtensionAPI) {
 
 				const results = await mapWithConcurrencyLimit(params.tasks, MAX_CONCURRENCY, async (t, index) => {
 					const taskId = getAgentId(t);
-					if (!taskId) return makeErrorResult("(missing id)", t.task, "Missing subagent id.");
+					if (!taskId) return makeErrorResult("(missing id)", t.task, "Missing subagent id.", undefined, t.session);
 					const result = await runSingleAgent(
 						pi,
 						ctx,
@@ -1368,6 +1375,7 @@ export default function (pi: ExtensionAPI) {
 
 		renderCall(args, theme, _context) {
 			const scope: AgentScope = args.agentScope ?? "user";
+			const formatCallSession = (session?: SessionIntent) => session ? theme.fg("muted", ` [session:${session}]`) : "";
 			if (args.chain && args.chain.length > 0) {
 				let text =
 					theme.fg("toolTitle", theme.bold("subagent ")) +
@@ -1383,6 +1391,7 @@ export default function (pi: ExtensionAPI) {
 						theme.fg("muted", `${i + 1}.`) +
 						" " +
 						theme.fg("accent", getAgentId(step) ?? "...") +
+						formatCallSession(step.session) +
 						theme.fg("dim", ` ${preview}`);
 				}
 				if (args.chain.length > 3) text += `\n  ${theme.fg("muted", `... +${args.chain.length - 3} more`)}`;
@@ -1395,7 +1404,7 @@ export default function (pi: ExtensionAPI) {
 					theme.fg("muted", ` [${scope}]`);
 				for (const t of args.tasks.slice(0, 3)) {
 					const preview = t.task.length > 40 ? `${t.task.slice(0, 40)}...` : t.task;
-					text += `\n  ${theme.fg("accent", getAgentId(t) ?? "...")}${theme.fg("dim", ` ${preview}`)}`;
+					text += `\n  ${theme.fg("accent", getAgentId(t) ?? "...")}${formatCallSession(t.session)}${theme.fg("dim", ` ${preview}`)}`;
 				}
 				if (args.tasks.length > 3) text += `\n  ${theme.fg("muted", `... +${args.tasks.length - 3} more`)}`;
 				return new Text(text, 0, 0);
@@ -1405,6 +1414,7 @@ export default function (pi: ExtensionAPI) {
 			let text =
 				theme.fg("toolTitle", theme.bold("subagent ")) +
 				theme.fg("accent", agentName) +
+				formatCallSession(args.session) +
 				theme.fg("muted", ` [${scope}]`);
 			text += `\n  ${theme.fg("dim", preview)}`;
 			return new Text(text, 0, 0);
@@ -1412,6 +1422,7 @@ export default function (pi: ExtensionAPI) {
 
 		renderResult(result, { expanded }, theme, _context) {
 			const details = result.details as SubagentDetails | undefined;
+			const formatResultSession = (r: SingleResult) => r.sessionIntent ? theme.fg("muted", ` [session:${r.sessionIntent}]`) : "";
 			if (!details || details.results.length === 0) {
 				const text = result.content[0];
 				return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
@@ -1444,7 +1455,7 @@ export default function (pi: ExtensionAPI) {
 
 				if (expanded) {
 					const container = new Container();
-					let header = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}`;
+					let header = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}${formatResultSession(r)}`;
 					if (isError && r.stopReason) header += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
 					container.addChild(new Text(header, 0, 0));
 					const nestedIds = getNestedSubagentIds(r.messages);
@@ -1485,7 +1496,7 @@ export default function (pi: ExtensionAPI) {
 				}
 
 				const nestedIds = getNestedSubagentIds(r.messages);
-				let text = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}`;
+				let text = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}${formatResultSession(r)}`;
 				if (nestedIds.length > 0) text += theme.fg("dim", ` +${nestedIds.length} nested`);
 				if (isError && r.stopReason) text += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
 				if (r.warning) text += `\n${theme.fg("warning", `Warning: ${r.warning}`)}`;
@@ -1538,7 +1549,7 @@ export default function (pi: ExtensionAPI) {
 						container.addChild(new Spacer(1));
 						container.addChild(
 							new Text(
-								`${theme.fg("muted", `─── Step ${r.step}: `) + theme.fg("accent", r.agent)} ${rIcon}`,
+								`${theme.fg("muted", `─── Step ${r.step}: `) + theme.fg("accent", r.agent)}${formatResultSession(r)} ${rIcon}`,
 								0,
 								0,
 							),
@@ -1585,7 +1596,7 @@ export default function (pi: ExtensionAPI) {
 				for (const r of details.results) {
 					const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
 					const displayItems = getDisplayItems(r.messages);
-					text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}`;
+					text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)}${formatResultSession(r)} ${rIcon}`;
 					if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
 					else text += `\n${renderDisplayItems(displayItems, 5)}`;
 				}
@@ -1626,7 +1637,7 @@ export default function (pi: ExtensionAPI) {
 
 						container.addChild(new Spacer(1));
 						container.addChild(
-							new Text(`${theme.fg("muted", "─── ") + theme.fg("accent", r.agent)} ${rIcon}`, 0, 0),
+							new Text(`${theme.fg("muted", "─── ") + theme.fg("accent", r.agent)}${formatResultSession(r)} ${rIcon}`, 0, 0),
 						);
 						container.addChild(new Text(theme.fg("muted", "Task: ") + theme.fg("dim", r.task), 0, 0));
 
@@ -1671,7 +1682,7 @@ export default function (pi: ExtensionAPI) {
 								? theme.fg("error", "✗")
 								: theme.fg("success", "✓");
 					const displayItems = getDisplayItems(r.messages);
-					text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}`;
+					text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)}${formatResultSession(r)} ${rIcon}`;
 					if (displayItems.length === 0)
 						text += `\n${theme.fg("muted", r.exitCode === -1 ? "(running...)" : "(no output)")}`;
 					else text += `\n${renderDisplayItems(displayItems, 5)}`;
