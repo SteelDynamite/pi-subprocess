@@ -22,7 +22,7 @@ import {
 	isPathInside,
 	loadSourceAgent,
 } from "./agents.ts";
-import { DEFAULT_KNOWN_TOOLS, MAX_CONCURRENCY, MAX_PARALLEL_TASKS } from "./constants.ts";
+import { ADVERTISE_SOURCE_AGENTS_ENV, DEFAULT_KNOWN_TOOLS, MAX_CONCURRENCY, MAX_PARALLEL_TASKS } from "./constants.ts";
 import { mapWithConcurrencyLimit, resolveAgent, runDelegation, setKnownToolNames, validateAgentTools } from "./execution.ts";
 import { getAgentId, getMissingSessionError } from "./params.ts";
 import { formatLocalSourcePrompt, formatSubagentManifest } from "./prompt.ts";
@@ -34,6 +34,11 @@ import { renderSubagentCall, renderSubagentResult } from "./render.ts";
 import type { OnUpdateCallback, SessionIntent, SingleResult, SubagentDetails } from "./types.ts";
 
 export { getFinalOutput } from "./result.ts";
+
+function shouldAdvertiseSourceAgents(): boolean {
+	const value = process.env[ADVERTISE_SOURCE_AGENTS_ENV]?.trim().toLowerCase();
+	return value !== "0" && value !== "false" && value !== "no" && value !== "off";
+}
 
 export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => restoreSubagentState(ctx));
@@ -91,7 +96,8 @@ export default function (pi: ExtensionAPI) {
 			...(event.systemPromptOptions.selectedTools ?? []),
 		]);
 
-		const discovery = discoverAgents(ctx.cwd, "user");
+		const advertiseSourceAgents = shouldAdvertiseSourceAgents();
+		const discovery = discoverAgents(ctx.cwd, "user", { includeSourceAgents: advertiseSourceAgents });
 		const manifest = formatSubagentManifest(discovery.agents);
 		const promptParts: string[] = [];
 
@@ -102,7 +108,7 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		const skipLocalSubagents = process.env.PI_SUBAGENT_SKIP_LOCAL_SUBAGENTS;
-		if (!skipLocalSubagents || path.resolve(skipLocalSubagents) !== path.resolve(ctx.cwd)) {
+		if (advertiseSourceAgents && (!skipLocalSubagents || path.resolve(skipLocalSubagents) !== path.resolve(ctx.cwd))) {
 			const local = loadSourceAgent(ctx.cwd, { readBody: true });
 			if (local.agent) {
 				promptParts.push(formatLocalSourcePrompt(ctx, event.systemPromptOptions, path.join(path.resolve(ctx.cwd), getSubagentsFileName()), local.agent.systemPrompt));
@@ -164,6 +170,7 @@ export default function (pi: ExtensionAPI) {
 			"Every delegation must include session: \"new\" or \"resume\"; use \"resume\" only when the previous result for that subagent said so.",
 			"Use id for behavior agents and source agents; behavior agents run from the caller cwd by default, source agents run from their source root.",
 			"Source ids are absolute or caller-cwd-relative folders containing SUBAGENTS.md; direct access is allowed only when the user explicitly authorizes it for the current request; recursive source delegation to the current source root or active source stack is blocked.",
+			"Behavior-agent child sessions do not advertise contextual/source agents by default; set includeSourceAgents true when a behavior agent should orchestrate source agents.",
 			'Default behavior agent scope is "user" (from ~/.pi/agent/agents).',
 			'To enable project-local behavior agents in .pi/agents, set agentScope: "both" (or "project").',
 		].join(" "),
@@ -171,6 +178,7 @@ export default function (pi: ExtensionAPI) {
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const agentScope: AgentScope = params.agentScope ?? "user";
+			const includeSourceAgents = params.includeSourceAgents ?? false;
 			const discovery = discoverAgents(ctx.cwd, agentScope);
 			const agents = discovery.agents;
 			const confirmProjectAgents = params.confirmProjectAgents ?? true;
@@ -186,6 +194,7 @@ export default function (pi: ExtensionAPI) {
 				(results: SingleResult[]): SubagentDetails => ({
 					mode,
 					agentScope,
+					includeSourceAgents,
 					projectAgentsDir: discovery.projectAgentsDir,
 					sourceAgents: discovery.sourceAgents.map((agent) => agent.id),
 					results,
@@ -303,6 +312,7 @@ export default function (pi: ExtensionAPI) {
 						signal,
 						chainUpdate,
 						makeDetails("chain"),
+						includeSourceAgents,
 					);
 					results.push(result);
 
@@ -387,6 +397,7 @@ export default function (pi: ExtensionAPI) {
 							}
 						},
 						makeDetails("parallel"),
+						includeSourceAgents,
 					);
 					allResults[index] = result;
 					emitParallelUpdate();
@@ -426,6 +437,7 @@ export default function (pi: ExtensionAPI) {
 					signal,
 					onUpdate,
 					makeDetails("single"),
+					includeSourceAgents,
 				);
 				const isError = isFailedResult(result);
 				if (isError) {

@@ -310,7 +310,8 @@ export function scanSourceAgents(
 	return { agents: roots, errors };
 }
 
-export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryResult {
+export function discoverAgents(cwd: string, scope: AgentScope, options: { includeSourceAgents?: boolean } = {}): AgentDiscoveryResult {
+	const includeSourceAgents = options.includeSourceAgents ?? true;
 	const packageDir = path.dirname(fileURLToPath(import.meta.url));
 	const bundledDir = path.join(packageDir, "agents");
 	const userDir = path.join(getAgentDir(), "agents");
@@ -322,7 +323,7 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 		scope === "user" || !projectAgentsDir
 			? { agents: [], errors: [] }
 			: loadBehaviorAgentsFromDir(projectAgentsDir, "project");
-	const source = scanSourceAgents(cwd);
+	const source = includeSourceAgents ? scanSourceAgents(cwd) : { agents: [], errors: [] };
 
 	const agentMap = new Map<string, AgentConfig>();
 	for (const agent of bundled.agents) agentMap.set(agent.id, agent);

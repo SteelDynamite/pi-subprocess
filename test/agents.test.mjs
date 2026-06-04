@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { isPathInside, loadSourceAgent, resolveSourceAgentId, scanSourceAgents } from "../agents.ts";
+import { discoverAgents, isPathInside, loadSourceAgent, resolveSourceAgentId, scanSourceAgents } from "../agents.ts";
 
 function tempDir() {
 	return mkdtempSync(join(tmpdir(), "pi-subagent-agents-test-"));
@@ -51,6 +51,24 @@ test("scanSourceAgents finds nested source roots, skips node_modules, and resolv
 		const scan = scanSourceAgents(root, { maxDepth: 4, timeoutMs: 1000 });
 		assert.deepEqual(scan.agents.map((a) => a.rootDir), [realpathSync(owned)]);
 		assert.equal(resolveSourceAgentId(root, "owned").rootDir, realpathSync(owned));
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("discoverAgents can omit source agents without changing behavior-agent scope", () => {
+	const root = tempDir();
+	try {
+		const owned = join(root, "owned");
+		mkdirSync(owned, { recursive: true });
+		writeFileSync(join(owned, "SUBAGENTS.md"), "---\ndescription: Owned\n---\nBody\n");
+
+		const withSource = discoverAgents(root, "project", { includeSourceAgents: true });
+		const withoutSource = discoverAgents(root, "project", { includeSourceAgents: false });
+
+		assert.ok(withSource.sourceAgents.some((a) => a.rootDir === realpathSync(owned)));
+		assert.equal(withoutSource.sourceAgents.length, 0);
+		assert.equal(withoutSource.agents.some((a) => a.source === "source"), false);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

@@ -8,7 +8,7 @@ import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import type { Message } from "@earendil-works/pi-ai";
 import type { AgentConfig } from "./agents.ts";
 import { getSubagentsFileName, isPathInside, resolveSourceAgentId, scanSourceAgents } from "./agents.ts";
-import { DEFAULT_KNOWN_TOOLS, MAX_SUBAGENT_DEPTH } from "./constants.ts";
+import { ADVERTISE_SOURCE_AGENTS_ENV, DEFAULT_KNOWN_TOOLS, MAX_SUBAGENT_DEPTH } from "./constants.ts";
 import { getFinalOutput, makeErrorResult } from "./result.ts";
 import { formatWrongIntentReason, getRequiredSessionIntent, getWrongIntentRetry, persistSubagentState, subagentSettings, updateTrackedSession } from "./state.ts";
 import { getSourceLoopError, makeChildSourceEnv, notifySourceBoundaryDiscovered } from "./source-guard.ts";
@@ -104,6 +104,7 @@ export async function runDelegation(
 	signal: AbortSignal | undefined,
 	onUpdate: OnUpdateCallback | undefined,
 	makeDetails: (results: SingleResult[]) => SubagentDetails,
+	includeSourceAgentsInBehaviorChild: boolean,
 ): Promise<SingleResult> {
 	const agent = resolveAgent(defaultCwd, agents, agentId);
 
@@ -227,6 +228,7 @@ export async function runDelegation(
 			const childEnv = {
 				...process.env,
 				PI_SUBAGENT_DEPTH: String(currentDepth + 1),
+				[ADVERTISE_SOURCE_AGENTS_ENV]: agent.kind === "behavior" ? (includeSourceAgentsInBehaviorChild ? "1" : "0") : "1",
 				...makeChildSourceEnv(agent),
 			};
 			const proc = spawn(invocation.command, invocation.args, {

@@ -67,6 +67,7 @@ export interface SingleResult {
 export interface SubagentDetails {
 	mode: "single" | "parallel" | "chain";
 	agentScope: AgentScope;
+	includeSourceAgents: boolean;
 	projectAgentsDir: string | null;
 	sourceAgents: string[];
 	results: SingleResult[];

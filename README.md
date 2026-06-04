@@ -95,12 +95,14 @@ Use a chain: first have scout find the read tool, then have planner suggest impr
 | Single | `{ id, session, task }` | One subagent id, required session intent (`"new"` or `"resume"`), one task (`agent` remains as a deprecated alias) |
 | Parallel | `{ tasks: [...] }` | Multiple `{ id, session, task }` tasks run concurrently (max 8, 4 concurrent) |
 | Chain | `{ chain: [...] }` | Sequential `{ id, session, task }` steps with `{previous}` placeholder |
+| Source advertisement | `includeSourceAgents?: boolean` | Allow behavior-agent child sessions to advertise contextual/source agents (default: `false`) |
 
 Working directory defaults:
 - Behavior agents run from the caller's current cwd.
 - Source agents run from the source root named by `id`.
 - `cwd` is a legacy behavior-agent override; omit it for normal use.
 - `session` is required on every subagent call. Use `"new"` for a first/fresh prompt and `"resume"` only when the previous result said so.
+- Behavior-agent child sessions do not advertise contextual/source agents by default. Set `includeSourceAgents: true` when a behavior agent should orchestrate source agents. Top-level source-agent delegation and source-boundary enforcement still work.
 
 ## Output Display
 
@@ -153,7 +155,7 @@ Project agents override user agents with the same id when `agentScope: "both"`.
 
 ## Source Agents
 
-Any descendant folder containing `SUBAGENTS.md` becomes a source-owned boundary. The manifest advertises source agents by absolute path id, unless `manifest: false` is set. Direct reads/edits/searches/commands inside those folders are blocked; delegate with `id: "/absolute/source/root"` or a caller-cwd-relative path. The source root from `id` is used as the subagent cwd. Source agents cannot delegate to their own current source root or another source root already in the delegation stack. Source agents do not trigger a startup notification; boundary messages appear only when direct access is blocked during use.
+Any descendant folder containing `SUBAGENTS.md` becomes a source-owned boundary. The manifest advertises source agents by absolute path id, unless `manifest: false` is set. Direct reads/edits/searches/commands inside those folders are blocked; delegate with `id: "/absolute/source/root"` or a caller-cwd-relative path. The source root from `id` is used as the subagent cwd. Source agents cannot delegate to their own current source root or another source root already in the delegation stack. Source agents do not trigger a startup notification; boundary messages appear only when direct access is blocked during use. Behavior-agent child sessions hide source-agent advertisements unless the parent call sets `includeSourceAgents: true`; source-boundary guards remain active.
 
 `SUBAGENTS.md` also replaces same-folder `AGENTS.md` by convention. When Pi starts in a source-agent folder with `SUBAGENTS.md` but no same-folder `AGENTS.md` or `CLAUDE.md`, this extension injects `SUBAGENTS.md` in the same project-context shape Pi uses for context files. If same-folder context already exists, the extension injects `SUBAGENTS.md` after normal context and states that it is more specific.
 

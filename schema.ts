@@ -37,5 +37,8 @@ export const SubagentParams = Type.Object({
 	confirmProjectAgents: Type.Optional(
 		Type.Boolean({ description: "Prompt before running project-local agents. Default: true.", default: true }),
 	),
+	includeSourceAgents: Type.Optional(
+		Type.Boolean({ description: "Allow behavior-agent child sessions to advertise contextual/source agents. Default: false.", default: false }),
+	),
 	cwd: Type.Optional(Type.String({ description: "Optional legacy cwd override for behavior agents (single mode); omit normally" })),
 });
