@@ -8,8 +8,8 @@ import { fileURLToPath } from "node:url";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
 export type AgentScope = "user" | "project" | "both";
-export type AgentSource = "bundled" | "user" | "project" | "source";
-export type AgentKind = "behavior" | "source";
+export type AgentOrigin = "bundled" | "user" | "project" | "locational";
+export type AgentKind = "behavioral" | "locational";
 
 export interface AgentConfig {
 	id: string;
@@ -18,7 +18,7 @@ export interface AgentConfig {
 	model?: string;
 	manifest: boolean;
 	systemPrompt: string;
-	source: AgentSource;
+	origin: AgentOrigin;
 	kind: AgentKind;
 	filePath: string;
 	rootDir: string;
@@ -28,15 +28,15 @@ export interface AgentConfig {
 export interface AgentDiscoveryResult {
 	agents: AgentConfig[];
 	projectAgentsDir: string | null;
-	sourceAgents: AgentConfig[];
+	locationalAgents: AgentConfig[];
 	errors: string[];
 }
 
 const SUBAGENTS_FILE = "SUBAGENTS.md";
-const DEFAULT_SOURCE_SCAN_MAX_DEPTH = 6;
-const DEFAULT_SOURCE_SCAN_TIMEOUT_MS = 500;
+const DEFAULT_LOCATIONAL_SCAN_MAX_DEPTH = 6;
+const DEFAULT_LOCATIONAL_SCAN_TIMEOUT_MS = 500;
 const ALLOWED_FRONTMATTER_KEYS = new Set(["description", "tools", "model", "manifest", "resumable"]);
-const SKIP_SOURCE_SCAN_DIRS = new Set([
+const SKIP_LOCATIONAL_SCAN_DIRS = new Set([
 	".git",
 	".hg",
 	".svn",
@@ -61,7 +61,7 @@ const SKIP_SOURCE_SCAN_DIRS = new Set([
 	"bin",
 ]);
 
-const DEFAULT_SOURCE_PROMPT = `You are a locational subagent. This directory is your source root.
+const DEFAULT_LOCATIONAL_PROMPT = `You are a locational subagent. This directory is your source root.
 
 Work only within this source root unless the task explicitly asks otherwise. If you discover nested locational folders listed in <available-subagents>, delegate work inside them instead of inspecting or modifying them directly.`;
 
@@ -161,7 +161,7 @@ function readSubagentContent(filePath: string, readBody: boolean): string {
 function loadSubagentFile(
 	filePath: string,
 	id: string,
-	source: AgentSource,
+	origin: AgentOrigin,
 	kind: AgentKind,
 	options: { readBody: boolean; rootDir?: string },
 ): { agent?: AgentConfig; error?: string } {
@@ -181,7 +181,7 @@ function loadSubagentFile(
 
 	const rootDir = options.rootDir ?? path.dirname(filePath);
 	const rawBody = options.readBody ? resolveAtIncludes(body, rootDir).trim() : "";
-	const systemPrompt = rawBody || (kind === "source" ? DEFAULT_SOURCE_PROMPT : "");
+	const systemPrompt = rawBody || (kind === "locational" ? DEFAULT_LOCATIONAL_PROMPT : "");
 
 	return {
 		agent: {
@@ -190,9 +190,9 @@ function loadSubagentFile(
 			tools: parseTools(frontmatter.tools),
 			model: frontmatter.model === undefined ? undefined : String(frontmatter.model),
 			manifest: parseBoolean(frontmatter.manifest, true),
-			resumable: parseBoolean(frontmatter.resumable, kind === "source"),
+			resumable: parseBoolean(frontmatter.resumable, kind === "locational"),
 			systemPrompt,
-			source,
+			origin,
 			kind,
 			filePath,
 			rootDir,
@@ -200,7 +200,7 @@ function loadSubagentFile(
 	};
 }
 
-function loadBehavioralAgentsFromDir(dir: string, source: "bundled" | "user" | "project"): { agents: AgentConfig[]; errors: string[] } {
+function loadBehavioralAgentsFromDir(dir: string, origin: "bundled" | "user" | "project"): { agents: AgentConfig[]; errors: string[] } {
 	const agents: AgentConfig[] = [];
 	const errors: string[] = [];
 
@@ -220,7 +220,7 @@ function loadBehavioralAgentsFromDir(dir: string, source: "bundled" | "user" | "
 		const filePath = path.join(rootDir, SUBAGENTS_FILE);
 		if (!fs.existsSync(filePath)) continue;
 
-		const loaded = loadSubagentFile(filePath, entry.name, source, "behavior", { readBody: true, rootDir });
+		const loaded = loadSubagentFile(filePath, entry.name, origin, "behavioral", { readBody: true, rootDir });
 		if (loaded.error) errors.push(loaded.error);
 		if (loaded.agent) agents.push(loaded.agent);
 	}
@@ -240,30 +240,30 @@ function findNearestProjectAgentsDir(cwd: string): string | null {
 	}
 }
 
-export function loadSourceAgent(rootDir: string, options: { readBody: boolean } = { readBody: true }): { agent?: AgentConfig; error?: string } {
+export function loadLocationalAgent(rootDir: string, options: { readBody: boolean } = { readBody: true }): { agent?: AgentConfig; error?: string } {
 	const absRoot = path.resolve(rootDir);
 	const filePath = path.join(absRoot, SUBAGENTS_FILE);
 	if (!fs.existsSync(filePath)) return { error: `${absRoot}: missing ${SUBAGENTS_FILE}` };
-	return loadSubagentFile(filePath, absRoot, "source", "source", { readBody: options.readBody, rootDir: absRoot });
+	return loadSubagentFile(filePath, absRoot, "locational", "locational", { readBody: options.readBody, rootDir: absRoot });
 }
 
-export function resolveSourceAgentId(cwd: string, id: string): AgentConfig | null {
+export function resolveLocationalAgentId(cwd: string, id: string): AgentConfig | null {
 	const candidate = realPathIfExists(path.resolve(cwd, id));
 	const filePath = path.join(candidate, SUBAGENTS_FILE);
 	if (!fs.existsSync(filePath) || !isDirectory(candidate)) return null;
-	const loaded = loadSourceAgent(candidate, { readBody: true });
+	const loaded = loadLocationalAgent(candidate, { readBody: true });
 	return loaded.agent ?? null;
 }
 
-export function scanSourceAgents(
+export function scanLocationalAgents(
 	cwd: string,
 	options: { maxDepth?: number; timeoutMs?: number } = {},
 ): { agents: AgentConfig[]; errors: string[] } {
 	const roots: AgentConfig[] = [];
 	const errors: string[] = [];
 	const start = path.resolve(cwd);
-	const maxDepth = options.maxDepth ?? readPositiveIntegerEnv("PI_SUBAGENT_SOURCE_SCAN_MAX_DEPTH", DEFAULT_SOURCE_SCAN_MAX_DEPTH);
-	const timeoutMs = options.timeoutMs ?? readPositiveIntegerEnv("PI_SUBAGENT_SOURCE_SCAN_TIMEOUT_MS", DEFAULT_SOURCE_SCAN_TIMEOUT_MS);
+	const maxDepth = options.maxDepth ?? readPositiveIntegerEnv("PI_SUBAGENT_LOCATIONAL_SCAN_MAX_DEPTH", DEFAULT_LOCATIONAL_SCAN_MAX_DEPTH);
+	const timeoutMs = options.timeoutMs ?? readPositiveIntegerEnv("PI_SUBAGENT_LOCATIONAL_SCAN_TIMEOUT_MS", DEFAULT_LOCATIONAL_SCAN_TIMEOUT_MS);
 	const startedAt = Date.now();
 	let timedOut = false;
 
@@ -286,14 +286,14 @@ export function scanSourceAgents(
 		for (const entry of entries) {
 			if (isTimedOut()) return;
 			if (!entry.isDirectory()) continue;
-			if (SKIP_SOURCE_SCAN_DIRS.has(entry.name)) continue;
+			if (SKIP_LOCATIONAL_SCAN_DIRS.has(entry.name)) continue;
 
 			const child = path.join(dir, entry.name);
 			if (isSymlink(child)) continue;
 
 			const subagentsPath = path.join(child, SUBAGENTS_FILE);
 			if (fs.existsSync(subagentsPath)) {
-				const loaded = loadSourceAgent(child, { readBody: false });
+				const loaded = loadLocationalAgent(child, { readBody: false });
 				if (loaded.error) errors.push(loaded.error);
 				if (loaded.agent) roots.push(loaded.agent);
 				continue;
@@ -305,13 +305,13 @@ export function scanSourceAgents(
 
 	visit(start, 1);
 	if (timedOut) {
-		errors.push(`Locational subagent scan stopped after ${timeoutMs}ms. Increase PI_SUBAGENT_SOURCE_SCAN_TIMEOUT_MS if needed.`);
+		errors.push(`Locational subagent scan stopped after ${timeoutMs}ms. Increase PI_SUBAGENT_LOCATIONAL_SCAN_TIMEOUT_MS if needed.`);
 	}
 	return { agents: roots, errors };
 }
 
-export function discoverAgents(cwd: string, scope: AgentScope, options: { includeSourceAgents?: boolean } = {}): AgentDiscoveryResult {
-	const includeSourceAgents = options.includeSourceAgents ?? true;
+export function discoverAgents(cwd: string, scope: AgentScope, options: { includeLocationalAgents?: boolean; includeSourceAgents?: boolean } = {}): AgentDiscoveryResult {
+	const includeLocationalAgents = options.includeLocationalAgents ?? options.includeSourceAgents ?? true;
 	const packageDir = path.dirname(fileURLToPath(import.meta.url));
 	const bundledDir = path.join(packageDir, "agents");
 	const userDir = path.join(getAgentDir(), "agents");
@@ -323,19 +323,19 @@ export function discoverAgents(cwd: string, scope: AgentScope, options: { includ
 		scope === "user" || !projectAgentsDir
 			? { agents: [], errors: [] }
 			: loadBehavioralAgentsFromDir(projectAgentsDir, "project");
-	const source = includeSourceAgents ? scanSourceAgents(cwd) : { agents: [], errors: [] };
+	const locational = includeLocationalAgents ? scanLocationalAgents(cwd) : { agents: [], errors: [] };
 
 	const agentMap = new Map<string, AgentConfig>();
 	for (const agent of bundled.agents) agentMap.set(agent.id, agent);
 	for (const agent of user.agents) agentMap.set(agent.id, agent);
 	for (const agent of project.agents) agentMap.set(agent.id, agent);
-	for (const agent of source.agents) agentMap.set(agent.id, agent);
+	for (const agent of locational.agents) agentMap.set(agent.id, agent);
 
 	return {
 		agents: Array.from(agentMap.values()),
 		projectAgentsDir,
-		sourceAgents: source.agents,
-		errors: [...bundled.errors, ...user.errors, ...project.errors, ...source.errors],
+		locationalAgents: locational.agents,
+		errors: [...bundled.errors, ...user.errors, ...project.errors, ...locational.errors],
 	};
 }
 
@@ -344,7 +344,7 @@ export function formatAgentList(agents: AgentConfig[], maxItems: number): { text
 	const listed = agents.slice(0, maxItems);
 	const remaining = agents.length - listed.length;
 	return {
-		text: listed.map((a) => `${a.id} (${a.source}): ${a.description}`).join("; "),
+		text: listed.map((a) => `${a.id} (${a.origin}): ${a.description}`).join("; "),
 		remaining,
 	};
 }

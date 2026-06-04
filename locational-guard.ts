@@ -3,16 +3,16 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "./agents.ts";
-import { getSubagentsFileName, scanSourceAgents } from "./agents.ts";
-import { CURRENT_SOURCE_ROOT_ENV, LEGACY_CURRENT_SOURCE_ROOT_ENV, SOURCE_ANCESTOR_STACK_ENV } from "./constants.ts";
+import { getSubagentsFileName, scanLocationalAgents } from "./agents.ts";
+import { CURRENT_LOCATIONAL_ROOT_ENV, LEGACY_CURRENT_LOCATIONAL_ROOT_ENV, LOCATIONAL_ANCESTOR_STACK_ENV } from "./constants.ts";
 
-const notifiedSourceBoundaryKeys = new Set<string>();
+const notifiedLocationalBoundaryKeys = new Set<string>();
 
-export function notifySourceBoundaryDiscovered(ctx: ExtensionContext, root: string) {
+export function notifyLocationalBoundaryDiscovered(ctx: ExtensionContext, root: string) {
 	if (!ctx.hasUI) return;
 	const key = `${path.resolve(ctx.cwd)}\0${path.resolve(root)}`;
-	if (notifiedSourceBoundaryKeys.has(key)) return;
-	notifiedSourceBoundaryKeys.add(key);
+	if (notifiedLocationalBoundaryKeys.has(key)) return;
+	notifiedLocationalBoundaryKeys.add(key);
 	ctx.ui.notify(`Locational boundary discovered: delegate to subagent id "${root}"`, "info");
 }
 
@@ -25,13 +25,13 @@ export function canonicalPath(value: string): string {
 	}
 }
 
-function getEnvSourceRoot(name: string): string | undefined {
+function getEnvLocationalRoot(name: string): string | undefined {
 	const value = process.env[name]?.trim();
 	return value ? canonicalPath(value) : undefined;
 }
 
-export function getSourceAncestorStack(): string[] {
-	const raw = process.env[SOURCE_ANCESTOR_STACK_ENV]?.trim();
+export function getLocationalAncestorStack(): string[] {
+	const raw = process.env[LOCATIONAL_ANCESTOR_STACK_ENV]?.trim();
 	const roots: string[] = [];
 	if (raw) {
 		try {
@@ -41,25 +41,25 @@ export function getSourceAncestorStack(): string[] {
 			roots.push(...raw.split(path.delimiter).filter(Boolean));
 		}
 	}
-	const current = getEnvSourceRoot(CURRENT_SOURCE_ROOT_ENV) ?? getEnvSourceRoot(LEGACY_CURRENT_SOURCE_ROOT_ENV);
+	const current = getEnvLocationalRoot(CURRENT_LOCATIONAL_ROOT_ENV) ?? getEnvLocationalRoot(LEGACY_CURRENT_LOCATIONAL_ROOT_ENV);
 	if (current) roots.push(current);
 	return Array.from(new Set(roots.map(canonicalPath)));
 }
 
-function formatSourceLoopError(agent: AgentConfig, matchingRoot: string): string {
-	const stack = getSourceAncestorStack();
+function formatLocationalLoopError(agent: AgentConfig, matchingRoot: string): string {
+	const stack = getLocationalAncestorStack();
 	const chain = [...stack, canonicalPath(agent.rootDir)].join(" -> ");
 	return `Locational delegation loop blocked: locational agent "${agent.id}" resolves to "${canonicalPath(agent.rootDir)}", which is already active as "${matchingRoot}".${chain ? ` Stack: ${chain}.` : ""}`;
 }
 
-export function getSourceLoopError(agent: AgentConfig): string | undefined {
-	if (agent.kind !== "source") return undefined;
+export function getLocationalLoopError(agent: AgentConfig): string | undefined {
+	if (agent.kind !== "locational") return undefined;
 	const targetRoot = canonicalPath(agent.rootDir);
-	const matchingRoot = getSourceAncestorStack().find((root) => root === targetRoot);
-	return matchingRoot ? formatSourceLoopError(agent, matchingRoot) : undefined;
+	const matchingRoot = getLocationalAncestorStack().find((root) => root === targetRoot);
+	return matchingRoot ? formatLocationalLoopError(agent, matchingRoot) : undefined;
 }
 
-function findContainingSourceRoot(cwd: string): string | undefined {
+function findContainingLocationalRoot(cwd: string): string | undefined {
 	let current = path.resolve(cwd);
 	while (true) {
 		if (fs.existsSync(path.join(current, getSubagentsFileName()))) return canonicalPath(current);
@@ -69,22 +69,22 @@ function findContainingSourceRoot(cwd: string): string | undefined {
 	}
 }
 
-export function getGuardedSourceRoots(cwd: string): string[] {
-	const activeSourceRoot = getEnvSourceRoot(CURRENT_SOURCE_ROOT_ENV) ?? getEnvSourceRoot(LEGACY_CURRENT_SOURCE_ROOT_ENV);
-	const roots = scanSourceAgents(cwd).agents.map((agent) => canonicalPath(agent.rootDir));
-	const containingRoot = findContainingSourceRoot(cwd);
+export function getGuardedLocationalRoots(cwd: string): string[] {
+	const activeLocationalRoot = getEnvLocationalRoot(CURRENT_LOCATIONAL_ROOT_ENV) ?? getEnvLocationalRoot(LEGACY_CURRENT_LOCATIONAL_ROOT_ENV);
+	const roots = scanLocationalAgents(cwd).agents.map((agent) => canonicalPath(agent.rootDir));
+	const containingRoot = findContainingLocationalRoot(cwd);
 	if (containingRoot) roots.push(containingRoot);
-	return Array.from(new Set(roots)).filter((root) => !activeSourceRoot || root !== activeSourceRoot);
+	return Array.from(new Set(roots)).filter((root) => !activeLocationalRoot || root !== activeLocationalRoot);
 }
 
-export function makeChildSourceEnv(agent: AgentConfig): Record<string, string> {
-	if (agent.kind !== "source") return {};
+export function makeChildLocationalEnv(agent: AgentConfig): Record<string, string> {
+	if (agent.kind !== "locational") return {};
 	const targetRoot = canonicalPath(agent.rootDir);
-	const stack = Array.from(new Set([...getSourceAncestorStack(), targetRoot]));
+	const stack = Array.from(new Set([...getLocationalAncestorStack(), targetRoot]));
 	return {
-		[CURRENT_SOURCE_ROOT_ENV]: targetRoot,
-		[SOURCE_ANCESTOR_STACK_ENV]: JSON.stringify(stack),
-		[LEGACY_CURRENT_SOURCE_ROOT_ENV]: targetRoot,
+		[CURRENT_LOCATIONAL_ROOT_ENV]: targetRoot,
+		[LOCATIONAL_ANCESTOR_STACK_ENV]: JSON.stringify(stack),
+		[LEGACY_CURRENT_LOCATIONAL_ROOT_ENV]: targetRoot,
 	};
 }
 

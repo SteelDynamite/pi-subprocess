@@ -169,7 +169,7 @@ export function renderSubagentResult(result: any, { expanded }: { expanded: bool
 
 				if (expanded) {
 					const container = new Container();
-					let header = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}${formatResultSession(r)}`;
+					let header = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentOrigin})`)}${formatResultSession(r)}`;
 					if (isError && r.stopReason) header += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
 					container.addChild(new Text(header, 0, 0));
 					const nestedIds = getNestedSubagentIds(r.messages);
@@ -212,7 +212,7 @@ export function renderSubagentResult(result: any, { expanded }: { expanded: bool
 				}
 
 				const nestedIds = getNestedSubagentIds(r.messages);
-				let text = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}${formatResultSession(r)}`;
+				let text = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentOrigin})`)}${formatResultSession(r)}`;
 				if (nestedIds.length > 0) text += theme.fg("dim", ` +${nestedIds.length} nested`);
 				if (isError && r.stopReason) text += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
 				if (r.warning) text += `\n${theme.fg("warning", `Warning: ${r.warning}`)}`;

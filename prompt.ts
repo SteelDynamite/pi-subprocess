@@ -3,7 +3,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "./agents.ts";
 import { getSubagentsFileName } from "./agents.ts";
 
-export function formatLocalSourcePrompt(ctx: ExtensionContext, systemPromptOptions: { contextFiles?: Array<{ path: string; content: string }> } | undefined, subagentsPath: string, content: string): string {
+export function formatLocalLocationalPrompt(ctx: ExtensionContext, systemPromptOptions: { contextFiles?: Array<{ path: string; content: string }> } | undefined, subagentsPath: string, content: string): string {
 	const hasSameFolderContext = systemPromptOptions?.contextFiles?.some((file) => {
 		const basename = path.basename(file.path).toLowerCase();
 		return path.resolve(path.dirname(file.path)) === path.resolve(ctx.cwd) && (basename === "agents.md" || basename === "claude.md");

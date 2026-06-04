@@ -5,29 +5,29 @@ import { join, resolve } from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
 import {
 	commandFilesystemTargets,
-	getGuardedSourceRoots,
-	getSourceAncestorStack,
-	getSourceLoopError,
-	makeChildSourceEnv,
+	getGuardedLocationalRoots,
+	getLocationalAncestorStack,
+	getLocationalLoopError,
+	makeChildLocationalEnv,
 	resolveFilesystemTarget,
-} from "../source-guard.ts";
-import { CURRENT_SOURCE_ROOT_ENV, LEGACY_CURRENT_SOURCE_ROOT_ENV, SOURCE_ANCESTOR_STACK_ENV } from "../constants.ts";
+} from "../locational-guard.ts";
+import { CURRENT_LOCATIONAL_ROOT_ENV, LEGACY_CURRENT_LOCATIONAL_ROOT_ENV, LOCATIONAL_ANCESTOR_STACK_ENV } from "../constants.ts";
 
 const originalEnv = {
-	[CURRENT_SOURCE_ROOT_ENV]: process.env[CURRENT_SOURCE_ROOT_ENV],
-	[LEGACY_CURRENT_SOURCE_ROOT_ENV]: process.env[LEGACY_CURRENT_SOURCE_ROOT_ENV],
-	[SOURCE_ANCESTOR_STACK_ENV]: process.env[SOURCE_ANCESTOR_STACK_ENV],
+	[CURRENT_LOCATIONAL_ROOT_ENV]: process.env[CURRENT_LOCATIONAL_ROOT_ENV],
+	[LEGACY_CURRENT_LOCATIONAL_ROOT_ENV]: process.env[LEGACY_CURRENT_LOCATIONAL_ROOT_ENV],
+	[LOCATIONAL_ANCESTOR_STACK_ENV]: process.env[LOCATIONAL_ANCESTOR_STACK_ENV],
 };
 
 function resetEnv() {
-	for (const key of [CURRENT_SOURCE_ROOT_ENV, LEGACY_CURRENT_SOURCE_ROOT_ENV, SOURCE_ANCESTOR_STACK_ENV]) {
+	for (const key of [CURRENT_LOCATIONAL_ROOT_ENV, LEGACY_CURRENT_LOCATIONAL_ROOT_ENV, LOCATIONAL_ANCESTOR_STACK_ENV]) {
 		if (originalEnv[key] === undefined) delete process.env[key];
 		else process.env[key] = originalEnv[key];
 	}
 }
 
 function clearEnv() {
-	for (const key of [CURRENT_SOURCE_ROOT_ENV, LEGACY_CURRENT_SOURCE_ROOT_ENV, SOURCE_ANCESTOR_STACK_ENV]) delete process.env[key];
+	for (const key of [CURRENT_LOCATIONAL_ROOT_ENV, LEGACY_CURRENT_LOCATIONAL_ROOT_ENV, LOCATIONAL_ANCESTOR_STACK_ENV]) delete process.env[key];
 }
 
 beforeEach(clearEnv);
@@ -64,47 +64,47 @@ test("commandFilesystemTargets extracts command path arguments and cwd options",
 	}
 });
 
-test("source ancestor stack accepts JSON stack and current root, deduplicated", () => {
+test("locational ancestor stack accepts JSON stack and current root, deduplicated", () => {
 	const root = tempDir();
 	const child = join(root, "child");
 	mkdirSync(child);
 	try {
-		process.env[SOURCE_ANCESTOR_STACK_ENV] = JSON.stringify([root, root]);
-		process.env[CURRENT_SOURCE_ROOT_ENV] = child;
-		assert.deepEqual(getSourceAncestorStack(), [realpathSync(root), realpathSync(child)]);
+		process.env[LOCATIONAL_ANCESTOR_STACK_ENV] = JSON.stringify([root, root]);
+		process.env[CURRENT_LOCATIONAL_ROOT_ENV] = child;
+		assert.deepEqual(getLocationalAncestorStack(), [realpathSync(root), realpathSync(child)]);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
 });
 
-test("getSourceLoopError blocks active source roots and makeChildSourceEnv appends child root", () => {
+test("getLocationalLoopError blocks active locational roots and makeChildLocationalEnv appends child root", () => {
 	const root = tempDir();
 	const child = join(root, "child");
 	mkdirSync(child);
 	try {
-		process.env[SOURCE_ANCESTOR_STACK_ENV] = JSON.stringify([root]);
-		const agent = { id: child, kind: "source", rootDir: child };
-		assert.equal(getSourceLoopError(agent), undefined);
-		const env = makeChildSourceEnv(agent);
-		assert.equal(env[CURRENT_SOURCE_ROOT_ENV], realpathSync(child));
-		assert.deepEqual(JSON.parse(env[SOURCE_ANCESTOR_STACK_ENV]), [realpathSync(root), realpathSync(child)]);
+		process.env[LOCATIONAL_ANCESTOR_STACK_ENV] = JSON.stringify([root]);
+		const agent = { id: child, kind: "locational", rootDir: child };
+		assert.equal(getLocationalLoopError(agent), undefined);
+		const env = makeChildLocationalEnv(agent);
+		assert.equal(env[CURRENT_LOCATIONAL_ROOT_ENV], realpathSync(child));
+		assert.deepEqual(JSON.parse(env[LOCATIONAL_ANCESTOR_STACK_ENV]), [realpathSync(root), realpathSync(child)]);
 
-		process.env[CURRENT_SOURCE_ROOT_ENV] = child;
-		assert.match(getSourceLoopError(agent), /Locational delegation loop blocked/);
+		process.env[CURRENT_LOCATIONAL_ROOT_ENV] = child;
+		assert.match(getLocationalLoopError(agent), /Locational delegation loop blocked/);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
 });
 
-test("getGuardedSourceRoots finds nested source roots and excludes the active root", () => {
+test("getGuardedLocationalRoots finds nested locational roots and excludes the active root", () => {
 	const root = tempDir();
 	const owned = join(root, "owned");
 	try {
 		mkdirSync(owned);
 		writeFileSync(join(owned, "SUBAGENTS.md"), "---\ndescription: Owned\n---\nBody\n");
-		assert.deepEqual(getGuardedSourceRoots(root), [realpathSync(owned)]);
-		process.env[CURRENT_SOURCE_ROOT_ENV] = owned;
-		assert.deepEqual(getGuardedSourceRoots(root), []);
+		assert.deepEqual(getGuardedLocationalRoots(root), [realpathSync(owned)]);
+		process.env[CURRENT_LOCATIONAL_ROOT_ENV] = owned;
+		assert.deepEqual(getGuardedLocationalRoots(root), []);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

@@ -104,11 +104,11 @@ export function makeErrorResult(
 	message: string,
 	step?: number,
 	sessionIntent?: SingleResult["sessionIntent"],
-	extra: Partial<Pick<SingleResult, "agentSource" | "errorMessage" | "wrongSessionIntent">> = {},
+	extra: Partial<Pick<SingleResult, "agentOrigin" | "errorMessage" | "wrongSessionIntent">> = {},
 ): SingleResult {
 	return {
 		agent: agentId,
-		agentSource: extra.agentSource ?? "unknown",
+		agentOrigin: extra.agentOrigin ?? "unknown",
 		sessionIntent,
 		wrongSessionIntent: extra.wrongSessionIntent,
 		task,

@@ -56,7 +56,7 @@ done
 
 This tool executes a separate `pi` subprocess with a delegated system prompt and tool/model configuration.
 
-**Project-local behavioral agents** (`.pi/agents/<id>/SUBAGENTS.md`) and **locational agents** (source/contextual agents at `<source-root>/SUBAGENTS.md`) are repo-controlled prompts that can instruct the model to read files, run bash commands, etc.
+**Project-local behavioral agents** (`.pi/agents/<id>/SUBAGENTS.md`) and **locational agents** (`<source-root>/SUBAGENTS.md`) are repo-controlled prompts that can instruct the model to read files, run bash commands, etc.
 
 **Default behavior:** Only loads **user-level agents** from `~/.pi/agent/agents`.
 
@@ -95,14 +95,15 @@ Use a chain: first have scout find the read tool, then have planner suggest impr
 | Single | `{ id, session, task }` | One subagent id, required session intent (`"new"` or `"resume"`), one task (`agent` remains as a deprecated alias) |
 | Parallel | `{ tasks: [...] }` | Multiple `{ id, session, task }` tasks run concurrently (max 8, 4 concurrent) |
 | Chain | `{ chain: [...] }` | Sequential `{ id, session, task }` steps with `{previous}` placeholder |
-| Locational advertisement | `includeSourceAgents?: boolean` | Allow behavioral-agent child sessions to advertise locational agents (source/contextual agents; default: `false`) |
+| Locational advertisement | `includeLocationalAgents?: boolean` | Allow behavioral-agent child sessions to advertise locational agents (default: `false`) |
 
 Working directory defaults:
 - Behavioral agents run from the caller's current cwd.
 - Locational agents run from the source root named by `id`.
 - `cwd` is a legacy behavioral-agent override; omit it for normal use.
 - `session` is required on every subagent call. Use `"new"` for a first/fresh prompt and `"resume"` only when the previous result said so.
-- Behavioral-agent child sessions do not advertise locational agents by default. Set `includeSourceAgents: true` when a behavioral agent should orchestrate locational agents. Top-level locational delegation and source-boundary enforcement still work.
+- Behavioral-agent child sessions do not advertise locational agents by default. Set `includeLocationalAgents: true` when a behavioral agent should orchestrate locational agents. Top-level locational delegation and locational-boundary enforcement still work.
+- Deprecated temporary alias: `includeSourceAgents` still maps to `includeLocationalAgents`.
 
 ## Output Display
 
@@ -155,13 +156,13 @@ Project agents override user agents with the same id when `agentScope: "both"`.
 
 ## Locational Agents
 
-Any descendant folder containing `SUBAGENTS.md` becomes a locational boundary. The manifest advertises locational agents by absolute path id, unless `manifest: false` is set. Direct reads/edits/searches/commands inside those folders are blocked; delegate with `id: "/absolute/source/root"` or a caller-cwd-relative path. The source root from `id` is used as the subagent cwd. Locational agents cannot delegate to their own current source root or another source root already in the delegation stack. Locational agents do not trigger a startup notification; boundary messages appear only when direct access is blocked during use. Behavioral-agent child sessions hide locational-agent advertisements unless the parent call sets `includeSourceAgents: true`; source-boundary guards remain active.
+Any descendant folder containing `SUBAGENTS.md` becomes a locational boundary. The manifest advertises locational agents by absolute path id, unless `manifest: false` is set. Direct reads/edits/searches/commands inside those folders are blocked; delegate with `id: "/absolute/source/root"` or a caller-cwd-relative path. The source root from `id` is used as the subagent cwd. Locational agents cannot delegate to their own current source root or another source root already in the delegation stack. Locational agents do not trigger a startup notification; boundary messages appear only when direct access is blocked during use. Behavioral-agent child sessions hide locational-agent advertisements unless the parent call sets `includeLocationalAgents: true`; locational-boundary guards remain active.
 
 `SUBAGENTS.md` also replaces same-folder `AGENTS.md` by convention. When Pi starts in a locational-agent folder with `SUBAGENTS.md` but no same-folder `AGENTS.md` or `CLAUDE.md`, this extension injects `SUBAGENTS.md` in the same project-context shape Pi uses for context files. If same-folder context already exists, the extension injects `SUBAGENTS.md` after normal context and states that it is more specific.
 
 Only these frontmatter fields are supported: `description`, `tools`, `model`, `manifest`, `resumable`. If `tools` is present, it is an exact allowlist; omit it to inherit defaults. If `model` is a comma-separated list, the first configured/available model is used; otherwise the caller model is used with a warning. `resumable` defaults to `false` for behavioral agents and `true` for locational agents.
 
-Locational-agent discovery is bounded so starting Pi from broad folders does not scan indefinitely. Defaults: max depth `6`, timeout `500ms`. Override with `PI_SUBAGENT_SOURCE_SCAN_MAX_DEPTH` and `PI_SUBAGENT_SOURCE_SCAN_TIMEOUT_MS`.
+Locational-agent discovery is bounded so starting Pi from broad folders does not scan indefinitely. Defaults: max depth `6`, timeout `500ms`. Override with `PI_SUBAGENT_LOCATIONAL_SCAN_MAX_DEPTH` and `PI_SUBAGENT_LOCATIONAL_SCAN_TIMEOUT_MS`.
 
 ## Resumable Sessions
 

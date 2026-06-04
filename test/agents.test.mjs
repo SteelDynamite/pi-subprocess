@@ -3,18 +3,18 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { discoverAgents, isPathInside, loadSourceAgent, resolveSourceAgentId, scanSourceAgents } from "../agents.ts";
+import { discoverAgents, isPathInside, loadLocationalAgent, resolveLocationalAgentId, scanLocationalAgents } from "../agents.ts";
 
 function tempDir() {
 	return mkdtempSync(join(tmpdir(), "pi-subagent-agents-test-"));
 }
 
-test("loadSourceAgent parses frontmatter, defaults, and same-root @includes", () => {
+test("loadLocationalAgent parses frontmatter, defaults, and same-root @includes", () => {
 	const root = tempDir();
 	try {
 		writeFileSync(join(root, "extra.md"), "included body");
 		writeFileSync(join(root, "SUBAGENTS.md"), "---\ndescription: Test\ntools: read, bash\nmanifest: false\nresumable: no\n---\n@extra.md\n");
-		const { agent, error } = loadSourceAgent(root, { readBody: true });
+		const { agent, error } = loadLocationalAgent(root, { readBody: true });
 		assert.equal(error, undefined);
 		assert.equal(agent.description, "Test");
 		assert.deepEqual(agent.tools, ["read", "bash"]);
@@ -26,11 +26,11 @@ test("loadSourceAgent parses frontmatter, defaults, and same-root @includes", ()
 	}
 });
 
-test("loadSourceAgent reports unsupported frontmatter", () => {
+test("loadLocationalAgent reports unsupported frontmatter", () => {
 	const root = tempDir();
 	try {
 		writeFileSync(join(root, "SUBAGENTS.md"), "---\nunknown: value\n---\nBody\n");
-		const { agent, error } = loadSourceAgent(root, { readBody: true });
+		const { agent, error } = loadLocationalAgent(root, { readBody: true });
 		assert.equal(agent, undefined);
 		assert.match(error, /unsupported frontmatter/);
 	} finally {
@@ -38,7 +38,7 @@ test("loadSourceAgent reports unsupported frontmatter", () => {
 	}
 });
 
-test("scanSourceAgents finds nested source roots, skips node_modules, and resolveSourceAgentId works", () => {
+test("scanLocationalAgents finds nested locational roots, skips node_modules, and resolveLocationalAgentId works", () => {
 	const root = tempDir();
 	try {
 		const owned = join(root, "owned");
@@ -48,9 +48,9 @@ test("scanSourceAgents finds nested source roots, skips node_modules, and resolv
 		writeFileSync(join(owned, "SUBAGENTS.md"), "---\ndescription: Owned\n---\nBody\n");
 		writeFileSync(join(skipped, "SUBAGENTS.md"), "---\ndescription: Skipped\n---\nBody\n");
 
-		const scan = scanSourceAgents(root, { maxDepth: 4, timeoutMs: 1000 });
+		const scan = scanLocationalAgents(root, { maxDepth: 4, timeoutMs: 1000 });
 		assert.deepEqual(scan.agents.map((a) => a.rootDir), [realpathSync(owned)]);
-		assert.equal(resolveSourceAgentId(root, "owned").rootDir, realpathSync(owned));
+		assert.equal(resolveLocationalAgentId(root, "owned").rootDir, realpathSync(owned));
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -63,12 +63,12 @@ test("discoverAgents can omit locational agents without changing behavioral-agen
 		mkdirSync(owned, { recursive: true });
 		writeFileSync(join(owned, "SUBAGENTS.md"), "---\ndescription: Owned\n---\nBody\n");
 
-		const withSource = discoverAgents(root, "project", { includeSourceAgents: true });
-		const withoutSource = discoverAgents(root, "project", { includeSourceAgents: false });
+		const withLocational = discoverAgents(root, "project", { includeLocationalAgents: true });
+		const withoutLocational = discoverAgents(root, "project", { includeLocationalAgents: false });
 
-		assert.ok(withSource.sourceAgents.some((a) => a.rootDir === realpathSync(owned)));
-		assert.equal(withoutSource.sourceAgents.length, 0);
-		assert.equal(withoutSource.agents.some((a) => a.source === "source"), false);
+		assert.ok(withLocational.locationalAgents.some((a) => a.rootDir === realpathSync(owned)));
+		assert.equal(withoutLocational.locationalAgents.length, 0);
+		assert.equal(withoutLocational.agents.some((a) => a.origin === "locational"), false);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

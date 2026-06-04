@@ -5,9 +5,9 @@
  * giving it an isolated context window.
  *
  * Supports three modes:
- *   - Single: { id: "name-or-source-path", session: "new|resume", task: "..." }
- *   - Parallel: { tasks: [{ id: "name-or-source-path", session: "new|resume", task: "..." }, ...] }
- *   - Chain: { chain: [{ id: "name-or-source-path", session: "new|resume", task: "... {previous} ..." }, ...] }
+ *   - Single: { id: "name-or-location-path", session: "new|resume", task: "..." }
+ *   - Parallel: { tasks: [{ id: "name-or-location-path", session: "new|resume", task: "..." }, ...] }
+ *   - Chain: { chain: [{ id: "name-or-location-path", session: "new|resume", task: "... {previous} ..." }, ...] }
  *
  * Uses JSON mode to capture structured output from subagents.
  */
@@ -20,23 +20,23 @@ import {
 	discoverAgents,
 	getSubagentsFileName,
 	isPathInside,
-	loadSourceAgent,
+	loadLocationalAgent,
 } from "./agents.ts";
-import { ADVERTISE_SOURCE_AGENTS_ENV, DEFAULT_KNOWN_TOOLS, MAX_CONCURRENCY, MAX_PARALLEL_TASKS } from "./constants.ts";
+import { ADVERTISE_LOCATIONAL_AGENTS_ENV, DEFAULT_KNOWN_TOOLS, LEGACY_ADVERTISE_LOCATIONAL_AGENTS_ENV, MAX_CONCURRENCY, MAX_PARALLEL_TASKS } from "./constants.ts";
 import { mapWithConcurrencyLimit, resolveAgent, runDelegation, setKnownToolNames, validateAgentTools } from "./execution.ts";
 import { getAgentId, getMissingSessionError } from "./params.ts";
-import { formatLocalSourcePrompt, formatSubagentManifest } from "./prompt.ts";
+import { formatLocalLocationalPrompt, formatSubagentManifest } from "./prompt.ts";
 import { getFinalOutput, getResultOutput, isFailedResult, makeErrorResult, truncateParallelOutput } from "./result.ts";
 import { SubagentParams } from "./schema.ts";
-import { commandFilesystemTargets, getGuardedSourceRoots, getSourceLoopError, notifySourceBoundaryDiscovered, resolveFilesystemTarget } from "./source-guard.ts";
+import { commandFilesystemTargets, getGuardedLocationalRoots, getLocationalLoopError, notifyLocationalBoundaryDiscovered, resolveFilesystemTarget } from "./locational-guard.ts";
 import { getMainSessionKey, persistSubagentState, restoreSubagentState, subagentSettings, trackedSessions } from "./state.ts";
 import { renderSubagentCall, renderSubagentResult } from "./render.ts";
 import type { OnUpdateCallback, SessionIntent, SingleResult, SubagentDetails } from "./types.ts";
 
 export { getFinalOutput } from "./result.ts";
 
-function shouldAdvertiseSourceAgents(): boolean {
-	const value = process.env[ADVERTISE_SOURCE_AGENTS_ENV]?.trim().toLowerCase();
+function shouldAdvertiseLocationalAgents(): boolean {
+	const value = (process.env[ADVERTISE_LOCATIONAL_AGENTS_ENV] ?? process.env[LEGACY_ADVERTISE_LOCATIONAL_AGENTS_ENV])?.trim().toLowerCase();
 	return value !== "0" && value !== "false" && value !== "no" && value !== "off";
 }
 
@@ -96,8 +96,8 @@ export default function (pi: ExtensionAPI) {
 			...(event.systemPromptOptions.selectedTools ?? []),
 		]);
 
-		const advertiseSourceAgents = shouldAdvertiseSourceAgents();
-		const discovery = discoverAgents(ctx.cwd, "user", { includeSourceAgents: advertiseSourceAgents });
+		const advertiseLocationalAgents = shouldAdvertiseLocationalAgents();
+		const discovery = discoverAgents(ctx.cwd, "user", { includeLocationalAgents: advertiseLocationalAgents });
 		const manifest = formatSubagentManifest(discovery.agents);
 		const promptParts: string[] = [];
 
@@ -108,10 +108,10 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		const skipLocalSubagents = process.env.PI_SUBAGENT_SKIP_LOCAL_SUBAGENTS;
-		if (advertiseSourceAgents && (!skipLocalSubagents || path.resolve(skipLocalSubagents) !== path.resolve(ctx.cwd))) {
-			const local = loadSourceAgent(ctx.cwd, { readBody: true });
+		if (advertiseLocationalAgents && (!skipLocalSubagents || path.resolve(skipLocalSubagents) !== path.resolve(ctx.cwd))) {
+			const local = loadLocationalAgent(ctx.cwd, { readBody: true });
 			if (local.agent) {
-				promptParts.push(formatLocalSourcePrompt(ctx, event.systemPromptOptions, path.join(path.resolve(ctx.cwd), getSubagentsFileName()), local.agent.systemPrompt));
+				promptParts.push(formatLocalLocationalPrompt(ctx, event.systemPromptOptions, path.join(path.resolve(ctx.cwd), getSubagentsFileName()), local.agent.systemPrompt));
 			}
 		}
 
@@ -126,8 +126,8 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("tool_call", async (event, ctx) => {
 		if (event.toolName === "subagent") return;
-		const sourceRoots = getGuardedSourceRoots(ctx.cwd);
-		if (sourceRoots.length === 0) return;
+		const locationalRoots = getGuardedLocationalRoots(ctx.cwd);
+		if (locationalRoots.length === 0) return;
 
 		const input = (event.input ?? {}) as Record<string, unknown>;
 		const pathKeys = ["path", "file_path", "filePath", "cwd", "dir", "directory", "root", "rootDir"];
@@ -150,9 +150,9 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		for (const candidate of candidatePaths) {
-			const root = sourceRoots.find((sourceRoot) => isPathInside(candidate, sourceRoot));
+			const root = locationalRoots.find((locationalRoot) => isPathInside(candidate, locationalRoot));
 			if (root) {
-				notifySourceBoundaryDiscovered(ctx, root);
+				notifyLocationalBoundaryDiscovered(ctx, root);
 				return {
 					block: true,
 					reason: `Locational boundary enforced: delegate to subagent id "${root}" instead of accessing it directly.`,
@@ -170,7 +170,7 @@ export default function (pi: ExtensionAPI) {
 			"Every delegation must include session: \"new\" or \"resume\"; use \"resume\" only when the previous result for that subagent said so.",
 			"Use id for behavioral agents and locational agents; behavioral agents run from the caller cwd by default, locational agents run from their source root.",
 			"Locational ids are absolute or caller-cwd-relative folders containing SUBAGENTS.md; direct access is allowed only when the user explicitly authorizes it for the current request; recursive locational delegation to the current source root or active source stack is blocked.",
-			"Behavioral-agent child sessions do not advertise locational agents by default; set includeSourceAgents true when a behavioral agent should orchestrate locational agents.",
+			"Behavioral-agent child sessions do not advertise locational agents by default; set includeLocationalAgents true when a behavioral agent should orchestrate locational agents.",
 			'Default behavioral agent scope is "user" (from ~/.pi/agent/agents).',
 			'To enable project-local behavioral agents in .pi/agents, set agentScope: "both" (or "project").',
 		].join(" "),
@@ -178,7 +178,7 @@ export default function (pi: ExtensionAPI) {
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const agentScope: AgentScope = params.agentScope ?? "user";
-			const includeSourceAgents = params.includeSourceAgents ?? false;
+			const includeLocationalAgents = params.includeLocationalAgents ?? params.includeSourceAgents ?? false;
 			const discovery = discoverAgents(ctx.cwd, agentScope);
 			const agents = discovery.agents;
 			const confirmProjectAgents = params.confirmProjectAgents ?? true;
@@ -194,14 +194,14 @@ export default function (pi: ExtensionAPI) {
 				(results: SingleResult[]): SubagentDetails => ({
 					mode,
 					agentScope,
-					includeSourceAgents,
+					includeLocationalAgents,
 					projectAgentsDir: discovery.projectAgentsDir,
-					sourceAgents: discovery.sourceAgents.map((agent) => agent.id),
+					locationalAgents: discovery.locationalAgents.map((agent) => agent.id),
 					results,
 				});
 
 			if (modeCount !== 1) {
-				const available = agents.map((a) => `${a.id} (${a.source})`).join(", ") || "none";
+				const available = agents.map((a) => `${a.id} (${a.origin})`).join(", ") || "none";
 				return {
 					content: [
 						{
@@ -232,11 +232,11 @@ export default function (pi: ExtensionAPI) {
 				if (!requested.id) continue;
 				const agent = resolveAgent(ctx.cwd, agents, requested.id);
 				if (!agent) continue;
-				const sourceLoopError = getSourceLoopError(agent);
-				if (sourceLoopError) {
-					const result = makeErrorResult(agent.id, requested.task, sourceLoopError, requested.step, requested.session);
+				const locationalLoopError = getLocationalLoopError(agent);
+				if (locationalLoopError) {
+					const result = makeErrorResult(agent.id, requested.task, locationalLoopError, requested.step, requested.session);
 					return {
-						content: [{ type: "text", text: sourceLoopError }],
+						content: [{ type: "text", text: locationalLoopError }],
 						details: makeDetails(mode)([result]),
 						isError: true,
 					};
@@ -251,14 +251,14 @@ export default function (pi: ExtensionAPI) {
 
 				const projectAgentsRequested = Array.from(requestedAgentIds)
 					.map((id) => agents.find((a) => a.id === id))
-					.filter((a): a is AgentConfig => a?.source === "project");
+					.filter((a): a is AgentConfig => a?.origin === "project");
 
 				if (projectAgentsRequested.length > 0) {
 					const names = projectAgentsRequested.map((a) => a.id).join(", ");
 					const dir = discovery.projectAgentsDir ?? "(unknown)";
 					const ok = await ctx.ui.confirm(
 						"Run project-local agents?",
-						`Agents: ${names}\nSource: ${dir}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,
+						`Agents: ${names}\nLocation: ${dir}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,
 					);
 					if (!ok)
 						return {
@@ -312,7 +312,7 @@ export default function (pi: ExtensionAPI) {
 						signal,
 						chainUpdate,
 						makeDetails("chain"),
-						includeSourceAgents,
+						includeLocationalAgents,
 					);
 					results.push(result);
 
@@ -352,7 +352,7 @@ export default function (pi: ExtensionAPI) {
 				for (let i = 0; i < params.tasks.length; i++) {
 					allResults[i] = {
 						agent: getAgentId(params.tasks[i]) ?? "(missing id)",
-						agentSource: "unknown",
+						agentOrigin: "unknown",
 						sessionIntent: params.tasks[i].session,
 						task: params.tasks[i].task,
 						exitCode: -1, // -1 = still running
@@ -397,7 +397,7 @@ export default function (pi: ExtensionAPI) {
 							}
 						},
 						makeDetails("parallel"),
-						includeSourceAgents,
+						includeLocationalAgents,
 					);
 					allResults[index] = result;
 					emitParallelUpdate();
@@ -437,7 +437,7 @@ export default function (pi: ExtensionAPI) {
 					signal,
 					onUpdate,
 					makeDetails("single"),
-					includeSourceAgents,
+					includeLocationalAgents,
 				);
 				const isError = isFailedResult(result);
 				if (isError) {
@@ -454,7 +454,7 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
-			const available = agents.map((a) => `${a.id} (${a.source})`).join(", ") || "none";
+			const available = agents.map((a) => `${a.id} (${a.origin})`).join(", ") || "none";
 			return {
 				content: [{ type: "text", text: `Invalid parameters. Available agents: ${available}` }],
 				details: makeDetails("single")([]),

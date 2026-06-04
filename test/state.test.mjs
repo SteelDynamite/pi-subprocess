@@ -24,8 +24,8 @@ function agent(overrides = {}) {
 	return {
 		id: "agent-a",
 		resumable: true,
-		kind: "behavior",
-		source: "user",
+		kind: "behavioral",
+		origin: "user",
 		rootDir: "/tmp/agent-a",
 		filePath: "/tmp/agent-a/SUBAGENTS.md",
 		description: "",
@@ -38,7 +38,7 @@ function agent(overrides = {}) {
 function result(overrides = {}) {
 	return {
 		agent: "agent-a",
-		agentSource: "user",
+		agentOrigin: "user",
 		task: "task",
 		exitCode: 0,
 		messages: [],

@@ -1,6 +1,6 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
-import type { AgentScope, AgentSource } from "./agents.ts";
+import type { AgentScope, AgentOrigin } from "./agents.ts";
 
 export type SessionIntent = "new" | "resume";
 
@@ -46,7 +46,7 @@ export interface WrongSessionIntentError {
 
 export interface SingleResult {
 	agent: string;
-	agentSource: AgentSource | "unknown";
+	agentOrigin: AgentOrigin | "unknown";
 	sessionIntent?: SessionIntent;
 	wrongSessionIntent?: WrongSessionIntentError;
 	task: string;
@@ -67,9 +67,9 @@ export interface SingleResult {
 export interface SubagentDetails {
 	mode: "single" | "parallel" | "chain";
 	agentScope: AgentScope;
-	includeSourceAgents: boolean;
+	includeLocationalAgents: boolean;
 	projectAgentsDir: string | null;
-	sourceAgents: string[];
+	locationalAgents: string[];
 	results: SingleResult[];
 }
 

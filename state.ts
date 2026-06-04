@@ -69,7 +69,7 @@ export function formatWrongIntentReason(agent: AgentConfig, requested: SessionIn
 	const retry = getWrongIntentRetry(required, reason);
 	if (!agent.resumable) return `Wrong session intent for "${agent.id}": requested "${requested}", required "new" because this subagent is not resumable. ${retry}`;
 	if (reason === "reuse-disabled") return `Wrong session intent for "${agent.id}": requested "${requested}", required "new" because resumable session reuse is disabled. ${retry}`;
-	if (reason === "over-threshold") return `Wrong session intent for "${agent.id}": requested "${requested}", required "new" because the source session is over the context limit. ${retry}`;
+	if (reason === "over-threshold") return `Wrong session intent for "${agent.id}": requested "${requested}", required "new" because the locational session is over the context limit. ${retry}`;
 	if (reason === "none") return `Wrong session intent for "${agent.id}": requested "${requested}", required "new" because no prior reusable session exists. ${retry}`;
 	return `Wrong session intent for "${agent.id}": requested "${requested}", required "${required}". ${retry}`;
 }

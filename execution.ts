@@ -7,11 +7,11 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import type { Message } from "@earendil-works/pi-ai";
 import type { AgentConfig } from "./agents.ts";
-import { getSubagentsFileName, isPathInside, resolveSourceAgentId, scanSourceAgents } from "./agents.ts";
-import { ADVERTISE_SOURCE_AGENTS_ENV, DEFAULT_KNOWN_TOOLS, MAX_SUBAGENT_DEPTH } from "./constants.ts";
+import { getSubagentsFileName, isPathInside, resolveLocationalAgentId, scanLocationalAgents } from "./agents.ts";
+import { ADVERTISE_LOCATIONAL_AGENTS_ENV, DEFAULT_KNOWN_TOOLS, MAX_SUBAGENT_DEPTH } from "./constants.ts";
 import { getFinalOutput, makeErrorResult } from "./result.ts";
 import { formatWrongIntentReason, getRequiredSessionIntent, getWrongIntentRetry, persistSubagentState, subagentSettings, updateTrackedSession } from "./state.ts";
-import { getSourceLoopError, makeChildSourceEnv, notifySourceBoundaryDiscovered } from "./source-guard.ts";
+import { getLocationalLoopError, makeChildLocationalEnv, notifyLocationalBoundaryDiscovered } from "./locational-guard.ts";
 import type { OnUpdateCallback, SessionIntent, SingleResult, SubagentDetails } from "./types.ts";
 
 let knownToolNames = new Set(DEFAULT_KNOWN_TOOLS);
@@ -21,9 +21,9 @@ export function setKnownToolNames(names: Iterable<string>) {
 }
 
 export function resolveAgent(defaultCwd: string, agents: AgentConfig[], id: string): AgentConfig | undefined {
-	const sourceAgent = resolveSourceAgentId(defaultCwd, id);
-	if (sourceAgent) return sourceAgent;
-	return agents.find((a) => a.kind === "behavior" && a.id === id);
+	const locationalAgent = resolveLocationalAgentId(defaultCwd, id);
+	if (locationalAgent) return locationalAgent;
+	return agents.find((a) => a.kind === "behavioral" && a.id === id);
 }
 
 function resolveOptionalCwd(defaultCwd: string, cwd: string | undefined): string | undefined {
@@ -104,7 +104,7 @@ export async function runDelegation(
 	signal: AbortSignal | undefined,
 	onUpdate: OnUpdateCallback | undefined,
 	makeDetails: (results: SingleResult[]) => SubagentDetails,
-	includeSourceAgentsInBehavioralChild: boolean,
+	includeLocationalAgentsInBehavioralChild: boolean,
 ): Promise<SingleResult> {
 	const agent = resolveAgent(defaultCwd, agents, agentId);
 
@@ -118,13 +118,13 @@ export async function runDelegation(
 		return makeErrorResult(agent.id, task, `Subagent recursion limit reached (max depth ${MAX_SUBAGENT_DEPTH}).`, step, session);
 	}
 
-	const sourceLoopError = getSourceLoopError(agent);
-	if (sourceLoopError) return makeErrorResult(agent.id, task, sourceLoopError, step, session);
+	const locationalLoopError = getLocationalLoopError(agent);
+	if (locationalLoopError) return makeErrorResult(agent.id, task, locationalLoopError, step, session);
 
 	const requestedCwd = resolveOptionalCwd(defaultCwd, cwd);
-	const effectiveCwd = agent.kind === "source" ? agent.rootDir : requestedCwd ?? defaultCwd;
+	const effectiveCwd = agent.kind === "locational" ? agent.rootDir : requestedCwd ?? defaultCwd;
 
-	if (agent.kind === "source" && requestedCwd && path.resolve(requestedCwd) !== path.resolve(agent.rootDir)) {
+	if (agent.kind === "locational" && requestedCwd && path.resolve(requestedCwd) !== path.resolve(agent.rootDir)) {
 		return makeErrorResult(
 			agent.id,
 			task,
@@ -147,17 +147,17 @@ export async function runDelegation(
 			step,
 			session,
 			{
-				agentSource: agent.source,
+				agentOrigin: agent.origin,
 				wrongSessionIntent: { agentId: agent.id, requested: session, required: requiredSession.intent, recommendedRetry: retry },
 			},
 		);
 	}
 
-	if (agent.kind === "behavior" && requestedCwd) {
-		const sourceRoots = scanSourceAgents(defaultCwd).agents.map((sourceAgent) => sourceAgent.rootDir);
-		const blocked = sourceRoots.find((root) => isPathInside(requestedCwd, root));
+	if (agent.kind === "behavioral" && requestedCwd) {
+		const locationalRoots = scanLocationalAgents(defaultCwd).agents.map((locationalAgent) => locationalAgent.rootDir);
+		const blocked = locationalRoots.find((root) => isPathInside(requestedCwd, root));
 		if (blocked) {
-			notifySourceBoundaryDiscovered(ctx, blocked);
+			notifyLocationalBoundaryDiscovered(ctx, blocked);
 			return makeErrorResult(
 				agent.id,
 				task,
@@ -185,7 +185,7 @@ export async function runDelegation(
 
 	const currentResult: SingleResult = {
 		agent: agent.id,
-		agentSource: agent.source,
+		agentOrigin: agent.origin,
 		sessionIntent: session,
 		task,
 		exitCode: 0,
@@ -211,7 +211,7 @@ export async function runDelegation(
 	try {
 		if (agent.systemPrompt.trim()) {
 			const prompt =
-				agent.kind === "source"
+				agent.kind === "locational"
 					? `# ${getSubagentsFileName()}\n\nThe following ${getSubagentsFileName()} is more specific than any AGENTS.md loaded from the same folder. Follow it for this source root.\n\n${agent.systemPrompt}`
 					: agent.systemPrompt;
 			const tmp = await writePromptToTempFile(agent.id, prompt);
@@ -228,8 +228,8 @@ export async function runDelegation(
 			const childEnv = {
 				...process.env,
 				PI_SUBAGENT_DEPTH: String(currentDepth + 1),
-				[ADVERTISE_SOURCE_AGENTS_ENV]: agent.kind === "behavior" ? (includeSourceAgentsInBehavioralChild ? "1" : "0") : "1",
-				...makeChildSourceEnv(agent),
+				[ADVERTISE_LOCATIONAL_AGENTS_ENV]: agent.kind === "behavioral" ? (includeLocationalAgentsInBehavioralChild ? "1" : "0") : "1",
+				...makeChildLocationalEnv(agent),
 			};
 			const proc = spawn(invocation.command, invocation.args, {
 				cwd: effectiveCwd,
