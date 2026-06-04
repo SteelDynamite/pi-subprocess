@@ -10,7 +10,7 @@ const TaskItem = Type.Object({
 	agent: Type.Optional(Type.String({ description: "Deprecated alias for id" })),
 	session: SessionIntentSchema,
 	task: Type.String({ description: "Task to delegate to the agent" }),
-	cwd: Type.Optional(Type.String({ description: "Optional legacy cwd override for behavior agents; omit normally" })),
+	cwd: Type.Optional(Type.String({ description: "Optional legacy cwd override for behavioral agents; omit normally" })),
 });
 
 const ChainItem = Type.Object({
@@ -18,7 +18,7 @@ const ChainItem = Type.Object({
 	agent: Type.Optional(Type.String({ description: "Deprecated alias for id" })),
 	session: SessionIntentSchema,
 	task: Type.String({ description: "Task with optional {previous} placeholder for prior output" }),
-	cwd: Type.Optional(Type.String({ description: "Optional legacy cwd override for behavior agents; omit normally" })),
+	cwd: Type.Optional(Type.String({ description: "Optional legacy cwd override for behavioral agents; omit normally" })),
 });
 
 const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
@@ -38,7 +38,7 @@ export const SubagentParams = Type.Object({
 		Type.Boolean({ description: "Prompt before running project-local agents. Default: true.", default: true }),
 	),
 	includeSourceAgents: Type.Optional(
-		Type.Boolean({ description: "Allow behavior-agent child sessions to advertise contextual/source agents. Default: false.", default: false }),
+		Type.Boolean({ description: "Allow behavioral-agent child sessions to advertise locational agents (source/contextual agents). Default: false.", default: false }),
 	),
-	cwd: Type.Optional(Type.String({ description: "Optional legacy cwd override for behavior agents (single mode); omit normally" })),
+	cwd: Type.Optional(Type.String({ description: "Optional legacy cwd override for behavioral agents (single mode); omit normally" })),
 });

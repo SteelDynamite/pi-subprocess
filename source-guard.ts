@@ -13,7 +13,7 @@ export function notifySourceBoundaryDiscovered(ctx: ExtensionContext, root: stri
 	const key = `${path.resolve(ctx.cwd)}\0${path.resolve(root)}`;
 	if (notifiedSourceBoundaryKeys.has(key)) return;
 	notifiedSourceBoundaryKeys.add(key);
-	ctx.ui.notify(`Source boundary discovered: delegate to subagent id "${root}"`, "info");
+	ctx.ui.notify(`Locational boundary discovered: delegate to subagent id "${root}"`, "info");
 }
 
 export function canonicalPath(value: string): string {
@@ -49,7 +49,7 @@ export function getSourceAncestorStack(): string[] {
 function formatSourceLoopError(agent: AgentConfig, matchingRoot: string): string {
 	const stack = getSourceAncestorStack();
 	const chain = [...stack, canonicalPath(agent.rootDir)].join(" -> ");
-	return `Source delegation loop blocked: source agent "${agent.id}" resolves to "${canonicalPath(agent.rootDir)}", which is already active as "${matchingRoot}".${chain ? ` Stack: ${chain}.` : ""}`;
+	return `Locational delegation loop blocked: locational agent "${agent.id}" resolves to "${canonicalPath(agent.rootDir)}", which is already active as "${matchingRoot}".${chain ? ` Stack: ${chain}.` : ""}`;
 }
 
 export function getSourceLoopError(agent: AgentConfig): string | undefined {

@@ -90,7 +90,7 @@ test("getSourceLoopError blocks active source roots and makeChildSourceEnv appen
 		assert.deepEqual(JSON.parse(env[SOURCE_ANCESTOR_STACK_ENV]), [realpathSync(root), realpathSync(child)]);
 
 		process.env[CURRENT_SOURCE_ROOT_ENV] = child;
-		assert.match(getSourceLoopError(agent), /Source delegation loop blocked/);
+		assert.match(getSourceLoopError(agent), /Locational delegation loop blocked/);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

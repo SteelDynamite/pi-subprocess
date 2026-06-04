@@ -104,7 +104,7 @@ export async function runDelegation(
 	signal: AbortSignal | undefined,
 	onUpdate: OnUpdateCallback | undefined,
 	makeDetails: (results: SingleResult[]) => SubagentDetails,
-	includeSourceAgentsInBehaviorChild: boolean,
+	includeSourceAgentsInBehavioralChild: boolean,
 ): Promise<SingleResult> {
 	const agent = resolveAgent(defaultCwd, agents, agentId);
 
@@ -128,7 +128,7 @@ export async function runDelegation(
 		return makeErrorResult(
 			agent.id,
 			task,
-			`Invalid configuration: source agent "${agent.id}" runs from its source root. Omit cwd or use the same path (${agent.rootDir}).`,
+			`Invalid configuration: locational agent "${agent.id}" runs from its source root. Omit cwd or use the same path (${agent.rootDir}).`,
 			step,
 			session,
 		);
@@ -161,7 +161,7 @@ export async function runDelegation(
 			return makeErrorResult(
 				agent.id,
 				task,
-				`Source boundary enforced: use subagent id "${blocked}" instead of running behavior agent "${agent.id}" with cwd inside it.`,
+				`Locational boundary enforced: use subagent id "${blocked}" instead of running behavioral agent "${agent.id}" with cwd inside it.`,
 				step,
 				session,
 			);
@@ -228,7 +228,7 @@ export async function runDelegation(
 			const childEnv = {
 				...process.env,
 				PI_SUBAGENT_DEPTH: String(currentDepth + 1),
-				[ADVERTISE_SOURCE_AGENTS_ENV]: agent.kind === "behavior" ? (includeSourceAgentsInBehaviorChild ? "1" : "0") : "1",
+				[ADVERTISE_SOURCE_AGENTS_ENV]: agent.kind === "behavior" ? (includeSourceAgentsInBehavioralChild ? "1" : "0") : "1",
 				...makeChildSourceEnv(agent),
 			};
 			const proc = spawn(invocation.command, invocation.args, {

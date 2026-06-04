@@ -61,9 +61,9 @@ const SKIP_SOURCE_SCAN_DIRS = new Set([
 	"bin",
 ]);
 
-const DEFAULT_SOURCE_PROMPT = `You are a source-owner subagent. This directory is your source root.
+const DEFAULT_SOURCE_PROMPT = `You are a locational subagent. This directory is your source root.
 
-Work only within this source root unless the task explicitly asks otherwise. If you discover nested source-owned folders listed in <available-subagents>, delegate work inside them instead of inspecting or modifying them directly.`;
+Work only within this source root unless the task explicitly asks otherwise. If you discover nested locational folders listed in <available-subagents>, delegate work inside them instead of inspecting or modifying them directly.`;
 
 function isDirectory(p: string): boolean {
 	try {
@@ -200,7 +200,7 @@ function loadSubagentFile(
 	};
 }
 
-function loadBehaviorAgentsFromDir(dir: string, source: "bundled" | "user" | "project"): { agents: AgentConfig[]; errors: string[] } {
+function loadBehavioralAgentsFromDir(dir: string, source: "bundled" | "user" | "project"): { agents: AgentConfig[]; errors: string[] } {
 	const agents: AgentConfig[] = [];
 	const errors: string[] = [];
 
@@ -305,7 +305,7 @@ export function scanSourceAgents(
 
 	visit(start, 1);
 	if (timedOut) {
-		errors.push(`Source subagent scan stopped after ${timeoutMs}ms. Increase PI_SUBAGENT_SOURCE_SCAN_TIMEOUT_MS if needed.`);
+		errors.push(`Locational subagent scan stopped after ${timeoutMs}ms. Increase PI_SUBAGENT_SOURCE_SCAN_TIMEOUT_MS if needed.`);
 	}
 	return { agents: roots, errors };
 }
@@ -317,12 +317,12 @@ export function discoverAgents(cwd: string, scope: AgentScope, options: { includ
 	const userDir = path.join(getAgentDir(), "agents");
 	const projectAgentsDir = findNearestProjectAgentsDir(cwd);
 
-	const bundled = loadBehaviorAgentsFromDir(bundledDir, "bundled");
-	const user = scope === "project" ? { agents: [], errors: [] } : loadBehaviorAgentsFromDir(userDir, "user");
+	const bundled = loadBehavioralAgentsFromDir(bundledDir, "bundled");
+	const user = scope === "project" ? { agents: [], errors: [] } : loadBehavioralAgentsFromDir(userDir, "user");
 	const project =
 		scope === "user" || !projectAgentsDir
 			? { agents: [], errors: [] }
-			: loadBehaviorAgentsFromDir(projectAgentsDir, "project");
+			: loadBehavioralAgentsFromDir(projectAgentsDir, "project");
 	const source = includeSourceAgents ? scanSourceAgents(cwd) : { agents: [], errors: [] };
 
 	const agentMap = new Map<string, AgentConfig>();

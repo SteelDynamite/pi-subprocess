@@ -56,7 +56,7 @@ test("scanSourceAgents finds nested source roots, skips node_modules, and resolv
 	}
 });
 
-test("discoverAgents can omit source agents without changing behavior-agent scope", () => {
+test("discoverAgents can omit locational agents without changing behavioral-agent scope", () => {
 	const root = tempDir();
 	try {
 		const owned = join(root, "owned");

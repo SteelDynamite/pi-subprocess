@@ -103,7 +103,7 @@ export default function (pi: ExtensionAPI) {
 
 		if (manifest) {
 			promptParts.push(
-				`Subagents can be delegated to with the subagent tool by id and required session intent ("new" or "resume"). Use session: "new" for a first/fresh call; use session: "resume" only when the previous result for that same subagent said to. Source subagent ids are source-owned boundaries; by default, do not read, search, edit, or run commands inside those folders directly from this agent. If the user explicitly authorizes direct access for a specific source root and task, direct access is allowed for that user request only. Do not delegate a source agent to its own current source root or an active source ancestor; the tool blocks recursive source loops.\n\n${manifest}`,
+				`Subagents can be delegated to with the subagent tool by id and required session intent ("new" or "resume"). Use session: "new" for a first/fresh call; use session: "resume" only when the previous result for that same subagent said to. Locational subagent ids are locational boundaries; by default, do not read, search, edit, or run commands inside those folders directly from this agent. If the user explicitly authorizes direct access for a specific source root and task, direct access is allowed for that user request only. Do not delegate a locational agent to its own current source root or an active source ancestor; the tool blocks recursive source loops.\n\n${manifest}`,
 			);
 		}
 
@@ -155,7 +155,7 @@ export default function (pi: ExtensionAPI) {
 				notifySourceBoundaryDiscovered(ctx, root);
 				return {
 					block: true,
-					reason: `Source boundary enforced: delegate to subagent id "${root}" instead of accessing it directly.`,
+					reason: `Locational boundary enforced: delegate to subagent id "${root}" instead of accessing it directly.`,
 				};
 			}
 		}
@@ -168,11 +168,11 @@ export default function (pi: ExtensionAPI) {
 			"Delegate tasks to specialized subagents with isolated context.",
 			"Modes: single (id + session + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
 			"Every delegation must include session: \"new\" or \"resume\"; use \"resume\" only when the previous result for that subagent said so.",
-			"Use id for behavior agents and source agents; behavior agents run from the caller cwd by default, source agents run from their source root.",
-			"Source ids are absolute or caller-cwd-relative folders containing SUBAGENTS.md; direct access is allowed only when the user explicitly authorizes it for the current request; recursive source delegation to the current source root or active source stack is blocked.",
-			"Behavior-agent child sessions do not advertise contextual/source agents by default; set includeSourceAgents true when a behavior agent should orchestrate source agents.",
-			'Default behavior agent scope is "user" (from ~/.pi/agent/agents).',
-			'To enable project-local behavior agents in .pi/agents, set agentScope: "both" (or "project").',
+			"Use id for behavioral agents and locational agents; behavioral agents run from the caller cwd by default, locational agents run from their source root.",
+			"Locational ids are absolute or caller-cwd-relative folders containing SUBAGENTS.md; direct access is allowed only when the user explicitly authorizes it for the current request; recursive locational delegation to the current source root or active source stack is blocked.",
+			"Behavioral-agent child sessions do not advertise locational agents by default; set includeSourceAgents true when a behavioral agent should orchestrate locational agents.",
+			'Default behavioral agent scope is "user" (from ~/.pi/agent/agents).',
+			'To enable project-local behavioral agents in .pi/agents, set agentScope: "both" (or "project").',
 		].join(" "),
 		parameters: SubagentParams,
 
