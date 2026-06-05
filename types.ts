@@ -45,6 +45,7 @@ export interface WrongSessionIntentError {
 }
 
 export interface SingleResult {
+	kind?: "subagent" | "command";
 	agent: string;
 	agentOrigin: AgentOrigin | "unknown";
 	sessionIntent?: SessionIntent;
@@ -52,7 +53,12 @@ export interface SingleResult {
 	task: string;
 	exitCode: number;
 	messages: Message[];
+	stdout?: string;
 	stderr: string;
+	stdoutBytes?: number;
+	stderrBytes?: number;
+	stdoutTruncated?: boolean;
+	stderrTruncated?: boolean;
 	usage: UsageStats;
 	model?: string;
 	contextWindow?: number;
@@ -61,6 +67,10 @@ export interface SingleResult {
 	errorMessage?: string;
 	step?: number;
 	cwd?: string;
+	durationMs?: number;
+	command?: string;
+	timeoutMs?: number;
+	timedOut?: boolean;
 	nextSessionIntent?: SessionIntent;
 }
 
@@ -76,3 +86,4 @@ export interface SubagentDetails {
 export type DisplayItem = { type: "text"; text: string } | { type: "toolCall"; name: string; args: Record<string, any> };
 
 export type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
+export type OnCommandUpdateCallback = (result: SingleResult) => void;

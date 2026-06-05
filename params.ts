@@ -4,6 +4,25 @@ export function getAgentId(input: { id?: string; agent?: string }): string | und
 	return input.id ?? input.agent;
 }
 
+export function getHandoffDocs(input: { contextDocs?: string[]; handoffDocs?: string[] }): string[] {
+	const docs = [...(input.contextDocs ?? []), ...(input.handoffDocs ?? [])]
+		.map((doc) => doc.trim())
+		.filter(Boolean);
+	return Array.from(new Set(docs));
+}
+
+export function addHandoffDocsToTask(task: string, input: { contextDocs?: string[]; handoffDocs?: string[] }): string {
+	const docs = getHandoffDocs(input);
+	if (docs.length === 0) return task;
+	return [
+		"Before starting, read these handoff/context docs and follow any relevant product guidance:",
+		...docs.map((doc) => `- ${doc}`),
+		"",
+		"Task:",
+		task,
+	].join("\n");
+}
+
 export function getMissingSessionError(params: any): string | undefined {
 	if (Array.isArray(params.chain) && params.chain.length > 0) {
 		const missingIndex = params.chain.findIndex((step: any) => !step.session);

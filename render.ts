@@ -111,6 +111,18 @@ export function renderSubagentCall(args: any, theme: any, _context: any) {
 				if (args.tasks.length > 3) text += `\n  ${theme.fg("muted", `... +${args.tasks.length - 3} more`)}`;
 				return new Text(text, 0, 0);
 			}
+			if (args.commands && args.commands.length > 0) {
+				let text =
+					theme.fg("toolTitle", theme.bold("subagent ")) +
+					theme.fg("accent", `commands (${args.commands.length} tasks)`);
+				for (const commandTask of args.commands.slice(0, 3)) {
+					const command = commandTask.command || "...";
+					const preview = command.length > 50 ? `${command.slice(0, 50)}...` : command;
+					text += `\n  ${theme.fg("accent", commandTask.name || "command")}${theme.fg("dim", ` $ ${preview}`)}`;
+				}
+				if (args.commands.length > 3) text += `\n  ${theme.fg("muted", `... +${args.commands.length - 3} more`)}`;
+				return new Text(text, 0, 0);
+			}
 			const agentName = getAgentId(args) || "...";
 			const preview = args.task ? (args.task.length > 60 ? `${args.task.slice(0, 60)}...` : args.task) : "...";
 			let text =

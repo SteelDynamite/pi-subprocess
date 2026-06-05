@@ -2,6 +2,7 @@ export const MAX_PARALLEL_TASKS = 8;
 export const MAX_CONCURRENCY = 4;
 export const COLLAPSED_ITEM_COUNT = 10;
 export const PER_TASK_OUTPUT_CAP = 50 * 1024;
+export const DEFAULT_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
 export const MAX_SUBAGENT_DEPTH = 5;
 export const DEFAULT_CONTEXT_THRESHOLD = 0.6;
 export const SUBAGENT_STATE_ENTRY = "subagent-state";

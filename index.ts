@@ -8,6 +8,7 @@
  *   - Single: { id: "name-or-location-path", session: "new|resume", task: "..." }
  *   - Parallel: { tasks: [{ id: "name-or-location-path", session: "new|resume", task: "..." }, ...] }
  *   - Chain: { chain: [{ id: "name-or-location-path", session: "new|resume", task: "... {previous} ..." }, ...] }
+ *   - Commands: { commands: [{ command: "npm test", cwd: ".", timeoutMs: 120000 }, ...] }
  *
  * Uses JSON mode to capture structured output from subagents.
  */
@@ -23,8 +24,9 @@ import {
 	loadLocationalAgent,
 } from "./agents.ts";
 import { ADVERTISE_LOCATIONAL_AGENTS_ENV, DEFAULT_KNOWN_TOOLS, LEGACY_ADVERTISE_LOCATIONAL_AGENTS_ENV, MAX_CONCURRENCY, MAX_PARALLEL_TASKS } from "./constants.ts";
+import { runCommandTask } from "./command.ts";
 import { mapWithConcurrencyLimit, resolveAgent, runDelegation, setKnownToolNames, validateAgentTools } from "./execution.ts";
-import { getAgentId, getMissingSessionError } from "./params.ts";
+import { addHandoffDocsToTask, getAgentId, getMissingSessionError } from "./params.ts";
 import { formatLocalLocationalPrompt, formatSubagentManifest } from "./prompt.ts";
 import { getFinalOutput, getResultOutput, isFailedResult, makeErrorResult, truncateParallelOutput } from "./result.ts";
 import { SubagentParams } from "./schema.ts";
@@ -165,11 +167,13 @@ export default function (pi: ExtensionAPI) {
 		name: "subagent",
 		label: "Subagent",
 		description: [
-			"Delegate tasks to specialized subagents with isolated context.",
-			"Modes: single (id + session + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
+			"Delegate tasks to specialized subagents with isolated context, or run foreground-managed command subprocesses.",
+			"Modes: single (id + session + task), parallel (tasks array), chain (sequential with {previous} placeholder), commands (command task array).",
 			"Every delegation must include session: \"new\" or \"resume\"; use \"resume\" only when the previous result for that subagent said so.",
 			"Use id for behavioral agents and locational agents; behavioral agents run from the caller cwd by default, locational agents run from their source root.",
 			"Locational ids are absolute or caller-cwd-relative folders containing SUBAGENTS.md; direct access is allowed only when the user explicitly authorizes it for the current request; recursive locational delegation to the current source root or active source stack is blocked.",
+			"For locational subagents, include relevant director/project docs with contextDocs or handoffDocs so the child reads them before starting.",
+			"Command tasks are foreground-managed: the tool streams progress, waits for completion, and returns consolidated results; it does not create detached jobs or jobId polling.",
 			"Behavioral-agent child sessions do not advertise locational agents by default; set includeLocationalAgents true when a behavioral agent should orchestrate locational agents.",
 			'Default behavioral agent scope is "user" (from ~/.pi/agent/agents).',
 			'To enable project-local behavioral agents in .pi/agents, set agentScope: "both" (or "project").',
@@ -185,9 +189,10 @@ export default function (pi: ExtensionAPI) {
 
 			const hasChain = (params.chain?.length ?? 0) > 0;
 			const hasTasks = (params.tasks?.length ?? 0) > 0;
+			const hasCommands = (params.commands?.length ?? 0) > 0;
 			const singleId = getAgentId(params);
 			const hasSingle = Boolean(singleId && params.task);
-			const modeCount = Number(hasChain) + Number(hasTasks) + Number(hasSingle);
+			const modeCount = Number(hasChain) + Number(hasTasks) + Number(hasCommands) + Number(hasSingle);
 
 			const makeDetails =
 				(mode: "single" | "parallel" | "chain") =>
@@ -214,7 +219,7 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
-			const mode = hasChain ? "chain" : hasTasks ? "parallel" : "single";
+			const mode = hasChain ? "chain" : hasTasks || hasCommands ? "parallel" : "single";
 			const missingSessionError = getMissingSessionError(params);
 			if (missingSessionError) {
 				return {
@@ -227,7 +232,9 @@ export default function (pi: ExtensionAPI) {
 				? params.chain!.map((step, index) => ({ id: getAgentId(step), session: step.session, task: step.task, step: index + 1 }))
 				: hasTasks
 					? params.tasks!.map((task) => ({ id: getAgentId(task), session: task.session, task: task.task }))
-					: [{ id: singleId, session: params.session, task: params.task ?? "" }];
+					: hasSingle
+						? [{ id: singleId, session: params.session, task: params.task ?? "" }]
+						: [];
 			for (const requested of requestedDelegations) {
 				if (!requested.id) continue;
 				const agent = resolveAgent(ctx.cwd, agents, requested.id);
@@ -268,6 +275,88 @@ export default function (pi: ExtensionAPI) {
 				}
 			}
 
+			if (params.commands && params.commands.length > 0) {
+				const locationalRoots = getGuardedLocationalRoots(ctx.cwd);
+				for (const commandTask of params.commands) {
+					const commandCwd = commandTask.cwd ? path.resolve(ctx.cwd, commandTask.cwd) : ctx.cwd;
+					const candidates = [commandCwd, ...commandFilesystemTargets(commandTask.command, commandCwd)];
+					const blockedRoot = candidates
+						.map((candidate) => locationalRoots.find((root) => isPathInside(candidate, root)))
+						.find((root): root is string => Boolean(root));
+					if (blockedRoot) {
+						notifyLocationalBoundaryDiscovered(ctx, blockedRoot);
+						return {
+							content: [{ type: "text", text: `Locational boundary enforced: delegate to subagent id "${blockedRoot}" instead of running a command inside it.` }],
+							details: makeDetails("parallel")([]),
+							isError: true,
+						};
+					}
+				}
+
+				if (params.commands.length > MAX_PARALLEL_TASKS)
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Too many command tasks (${params.commands.length}). Max is ${MAX_PARALLEL_TASKS}.`,
+							},
+						],
+						details: makeDetails("parallel")([]),
+					};
+
+				const allResults: SingleResult[] = params.commands.map((commandTask) => ({
+					kind: "command",
+					agent: commandTask.name?.trim() || commandTask.command,
+					agentOrigin: "unknown",
+					task: commandTask.command,
+					command: commandTask.command,
+					exitCode: -1,
+					messages: [],
+					stdout: "",
+					stderr: "",
+					usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+					cwd: commandTask.cwd ? path.resolve(ctx.cwd, commandTask.cwd) : ctx.cwd,
+					timeoutMs: commandTask.timeoutMs,
+				}));
+
+				const emitCommandUpdate = () => {
+					if (!onUpdate) return;
+					const running = allResults.filter((r) => r.exitCode === -1).length;
+					const done = allResults.length - running;
+					onUpdate({
+						content: [{ type: "text", text: `Commands: ${done}/${allResults.length} done, ${running} running...` }],
+						details: makeDetails("parallel")([...allResults]),
+					});
+				};
+
+				const results = await mapWithConcurrencyLimit(params.commands, MAX_CONCURRENCY, async (commandTask, index) => {
+					const result = await runCommandTask(ctx.cwd, commandTask, undefined, signal, (partial) => {
+						allResults[index] = partial;
+						emitCommandUpdate();
+					});
+					allResults[index] = result;
+					emitCommandUpdate();
+					return result;
+				});
+
+				const successCount = results.filter((r) => !isFailedResult(r)).length;
+				const summaries = results.map((r) => {
+					const output = truncateParallelOutput(getResultOutput(r));
+					const status = isFailedResult(r) ? `failed (exit ${r.exitCode})` : "completed";
+					return `### [${r.agent}] ${status}\n\n${output}`;
+				});
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Commands: ${successCount}/${results.length} succeeded\n\n${summaries.join("\n\n---\n\n")}`,
+						},
+					],
+					details: makeDetails("parallel")(results),
+					isError: successCount !== results.length,
+				};
+			}
+
 			if (params.chain && params.chain.length > 0) {
 				const results: SingleResult[] = [];
 				let previousOutput = "";
@@ -282,7 +371,7 @@ export default function (pi: ExtensionAPI) {
 							isError: true,
 						};
 					}
-					const taskWithContext = step.task.replace(/\{previous\}/g, previousOutput);
+					const taskWithContext = addHandoffDocsToTask(step.task.replace(/\{previous\}/g, previousOutput), step);
 
 					// Create update callback that includes all previous results
 					const chainUpdate: OnUpdateCallback | undefined = onUpdate
@@ -385,7 +474,7 @@ export default function (pi: ExtensionAPI) {
 						agents,
 						taskId,
 						t.session,
-						t.task,
+						addHandoffDocsToTask(t.task, t),
 						t.cwd,
 						undefined,
 						signal,
@@ -431,7 +520,7 @@ export default function (pi: ExtensionAPI) {
 					agents,
 					singleId,
 					params.session as SessionIntent,
-					params.task,
+					addHandoffDocsToTask(params.task, params),
 					params.cwd,
 					undefined,
 					signal,

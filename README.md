@@ -10,6 +10,7 @@ Delegate tasks to specialized subagents with isolated context windows.
 - **Markdown rendering**: Final output rendered with proper formatting (expanded view)
 - **Usage tracking**: Shows turns, tokens, cost, and context usage per agent
 - **Abort support**: Ctrl+C propagates to kill subagent processes
+- **Command subprocesses**: Run shell commands with bounded foreground parallelism and consolidated results
 
 ## Structure
 
@@ -76,6 +77,13 @@ Use scout to find all authentication code
 Run 2 scouts in parallel: one to find models, one to find providers
 ```
 
+### Command subprocesses
+```
+Use subagent commands to run npm test and npm run typecheck in parallel
+```
+
+Command subprocesses are foreground-managed: the tool streams progress, waits for all commands to finish, and returns consolidated exit status, duration, cwd, stdout, and stderr. They do not create detached jobs or jobId polling.
+
 ### Chained workflow
 ```
 Use a chain: first have scout find the read tool, then have planner suggest improvements
@@ -95,6 +103,7 @@ Use a chain: first have scout find the read tool, then have planner suggest impr
 | Single | `{ id, session, task }` | One subagent id, required session intent (`"new"` or `"resume"`), one task (`agent` remains as a deprecated alias) |
 | Parallel | `{ tasks: [...] }` | Multiple `{ id, session, task }` tasks run concurrently (max 8, 4 concurrent) |
 | Chain | `{ chain: [...] }` | Sequential `{ id, session, task }` steps with `{previous}` placeholder |
+| Commands | `{ commands: [{ command, name?, cwd?, timeoutMs?, maxOutputBytes? }] }` | Foreground-managed shell command tasks with bounded concurrency and consolidated results |
 | Locational advertisement | `includeLocationalAgents?: boolean` | Allow behavioral-agent child sessions to advertise locational agents (default: `false`) |
 
 Working directory defaults:
@@ -102,6 +111,7 @@ Working directory defaults:
 - Locational agents run from the source root named by `id`.
 - `cwd` is a legacy behavioral-agent override; omit it for normal use.
 - `session` is required on every subagent call. Use `"new"` for a first/fresh prompt and `"resume"` only when the previous result said so.
+- `contextDocs` or `handoffDocs` may be set on single, parallel task, or chain step inputs. The child task is prefixed with a request to read those docs first; use this for relevant director/project docs when delegating to locational subagents.
 - Behavioral-agent child sessions do not advertise locational agents by default. Set `includeLocationalAgents: true` when a behavioral agent should orchestrate locational agents. Top-level locational delegation and locational-boundary enforcement still work.
 - Deprecated temporary alias: `includeSourceAgents` still maps to `includeLocationalAgents`.
 
@@ -125,6 +135,13 @@ Working directory defaults:
 - Shows "2/3 done, 1 running" status
 - Returns each completed task's final output to the parent model, capped at 50 KB per task
 - Returns failure diagnostics from stderr/error messages when a child exits before producing output
+
+**Command mode streaming**:
+- Runs `commands` entries with the same bounded concurrency as parallel subagents
+- Streams stdout/stderr progress while the parent waits
+- Returns one consolidated result with command, cwd, exit code, duration, stdout, stderr, and truncation flags
+- Supports per-command `timeoutMs` (default: 600000ms) and `maxOutputBytes`
+- On POSIX, timeout/abort cleanup signals the command process group before falling back to child-process signaling
 
 **Tool call formatting** (mimics built-in tools):
 - `$ command` for bash

@@ -48,10 +48,36 @@ export function getFinalOutput(messages: Message[]): string {
 }
 
 export function isFailedResult(result: SingleResult): boolean {
-	return result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
+	return result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted" || result.stopReason === "timeout";
+}
+
+function formatDuration(ms: number | undefined): string {
+	if (ms === undefined) return "unknown";
+	if (ms < 1000) return `${ms}ms`;
+	return `${(ms / 1000).toFixed(2)}s`;
+}
+
+function formatStream(name: string, text: string | undefined, truncated: boolean | undefined, bytes: number | undefined): string {
+	const body = text && text.length > 0 ? text.trimEnd() : "(empty)";
+	const truncation = truncated ? ` [truncated at ${formatTokens(Buffer.byteLength(text ?? "", "utf8"))}/${formatTokens(bytes ?? 0)} bytes]` : "";
+	return `## ${name}${truncation}\n\n${body}`;
+}
+
+export function formatCommandResultOutput(result: SingleResult): string {
+	const exit = result.exitCode === -1 ? "running" : String(result.exitCode);
+	const lines = [
+		`Command: ${result.command ?? result.task}`,
+		`Cwd: ${result.cwd ?? "(default)"}`,
+		`Exit: ${exit}`,
+		`Duration: ${formatDuration(result.durationMs)}`,
+	];
+	if (result.timeoutMs) lines.push(`Timeout: ${result.timeoutMs}ms${result.timedOut ? " (hit)" : ""}`);
+	if (result.errorMessage) lines.push(`Error: ${result.errorMessage}`);
+	return `${lines.join("\n")}\n\n${formatStream("stdout", result.stdout, result.stdoutTruncated, result.stdoutBytes)}\n\n${formatStream("stderr", result.stderr, result.stderrTruncated, result.stderrBytes)}`;
 }
 
 export function getResultOutput(result: SingleResult): string {
+	if (result.kind === "command") return formatCommandResultOutput(result);
 	const warning = result.warning ? `Warning: ${result.warning}\n\n` : "";
 	const nextIntent = result.nextSessionIntent
 		? `\n\nNext call to this subagent should use session: "${result.nextSessionIntent}"`
