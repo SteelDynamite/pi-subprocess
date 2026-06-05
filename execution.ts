@@ -8,7 +8,7 @@ import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import type { Message } from "@earendil-works/pi-ai";
 import type { AgentConfig } from "./agents.ts";
 import { getSubagentsFileName, isPathInside, resolveLocationalAgentId, scanLocationalAgents } from "./agents.ts";
-import { ADVERTISE_LOCATIONAL_AGENTS_ENV, DEFAULT_KNOWN_TOOLS, MAX_SUBAGENT_DEPTH } from "./constants.ts";
+import { ADVERTISE_LOCATIONAL_AGENTS_ENV, DEFAULT_KNOWN_TOOLS, MAX_SUBAGENT_DEPTH, ORCHESTRATED_CHILD_ENV, SUBAGENT_CHILD_ENV } from "./constants.ts";
 import { getFinalOutput, makeErrorResult } from "./result.ts";
 import { formatWrongIntentReason, getRequiredSessionIntent, getWrongIntentRetry, persistSubagentState, subagentSettings, updateTrackedSession } from "./state.ts";
 import { getLocationalLoopError, makeChildLocationalEnv, notifyLocationalBoundaryDiscovered } from "./locational-guard.ts";
@@ -63,6 +63,20 @@ export function validateAgentTools(agent: AgentConfig): string | undefined {
 	const unknown = agent.tools.filter((tool) => !knownToolNames.has(tool));
 	if (unknown.length === 0) return undefined;
 	return `${agent.filePath}: unknown tool(s): ${unknown.join(", ")}. Explicit tools must match available tool names exactly.`;
+}
+
+export function makeSubagentChildEnv(
+	agent: AgentConfig,
+	currentDepth: number,
+	includeLocationalAgentsInBehavioralChild: boolean,
+): Record<string, string> {
+	return {
+		PI_SUBAGENT_DEPTH: String(currentDepth + 1),
+		[SUBAGENT_CHILD_ENV]: "1",
+		[ORCHESTRATED_CHILD_ENV]: "1",
+		[ADVERTISE_LOCATIONAL_AGENTS_ENV]: agent.kind === "behavioral" ? (includeLocationalAgentsInBehavioralChild ? "1" : "0") : "1",
+		...makeChildLocationalEnv(agent),
+	};
 }
 
 async function writePromptToTempFile(agentName: string, prompt: string): Promise<{ dir: string; filePath: string }> {
@@ -227,9 +241,7 @@ export async function runDelegation(
 			const invocation = getPiInvocation(args);
 			const childEnv = {
 				...process.env,
-				PI_SUBAGENT_DEPTH: String(currentDepth + 1),
-				[ADVERTISE_LOCATIONAL_AGENTS_ENV]: agent.kind === "behavioral" ? (includeLocationalAgentsInBehavioralChild ? "1" : "0") : "1",
-				...makeChildLocationalEnv(agent),
+				...makeSubagentChildEnv(agent, currentDepth, includeLocationalAgentsInBehavioralChild),
 			};
 			const proc = spawn(invocation.command, invocation.args, {
 				cwd: effectiveCwd,

@@ -55,7 +55,7 @@ done
 
 ## Security Model
 
-This tool executes a separate `pi` subprocess with a delegated system prompt and tool/model configuration.
+This tool executes a separate `pi` subprocess with a delegated system prompt and tool/model configuration. Subagent child processes receive `PI_SUBAGENT_CHILD=1` and `PI_ORCHESTRATED_CHILD=1` in their environment.
 
 **Project-local behavioral agents** (`.pi/agents/<id>/SUBAGENTS.md`) and **locational agents** (`<source-root>/SUBAGENTS.md`) are repo-controlled prompts that can instruct the model to read files, run bash commands, etc.
 
