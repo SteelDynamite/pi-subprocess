@@ -118,8 +118,6 @@ Legacy compatibility also sets `PI_SUBAGENT_CHILD=1`.
 
 Use `/subprocess-settings` to toggle resumable-session reuse, set the context threshold, view active sessions, or reset tracked sessions.
 
-Legacy alias: `/subagent-settings`.
-
 ## Compatibility
 
 Preserved aliases:

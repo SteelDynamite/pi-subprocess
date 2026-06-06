@@ -118,7 +118,6 @@ export default function (pi: ExtensionAPI) {
 		},
 	};
 	pi.registerCommand("subprocess-settings", settingsCommand);
-	pi.registerCommand("subagent-settings", { ...settingsCommand, description: "Deprecated alias for subprocess-settings" });
 
 	pi.on("before_agent_start", async (event, ctx) => {
 		setKnownToolNames([
