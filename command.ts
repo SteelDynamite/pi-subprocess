@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import * as path from "node:path";
 import { DEFAULT_COMMAND_TIMEOUT_MS, PER_TASK_OUTPUT_CAP } from "./constants.ts";
+import { createSubprocessLifecycle, getSubprocessLifecycleSnapshot, markSubprocessActivity, markSubprocessClosed, markSubprocessTerminating, recordSubprocessError } from "./lifecycle.ts";
 import { formatCommandResultOutput } from "./result.ts";
 import type { OnCommandUpdateCallback, SingleResult } from "./types.ts";
 
@@ -61,11 +62,11 @@ export async function runCommandTask(
 	signal: AbortSignal | undefined,
 	onUpdate: OnCommandUpdateCallback | undefined,
 ): Promise<SingleResult> {
-	const startedAt = Date.now();
 	const cwd = resolveCommandCwd(defaultCwd, input.cwd);
 	const maxOutputBytes = normalizePositiveInteger(input.maxOutputBytes, PER_TASK_OUTPUT_CAP);
 	const timeoutMs = normalizePositiveInteger(input.timeoutMs, DEFAULT_COMMAND_TIMEOUT_MS);
 	const label = input.name?.trim() || input.command;
+	const lifecycle = createSubprocessLifecycle("command", label, { timeoutMs });
 	const result: SingleResult = {
 		kind: "command",
 		agent: label,
@@ -87,8 +88,17 @@ export async function runCommandTask(
 		timeoutMs,
 	};
 
+	const updateFromLifecycle = () => {
+		const snapshot = getSubprocessLifecycleSnapshot(lifecycle);
+		result.exitCode = snapshot.exitCode;
+		result.durationMs = snapshot.durationMs;
+		result.stopReason = snapshot.stopReason === "error" ? undefined : snapshot.stopReason;
+		result.timedOut = snapshot.timedOut;
+		result.errorMessage = snapshot.errorMessage;
+	};
+
 	const updateMessage = () => {
-		result.durationMs = Date.now() - startedAt;
+		updateFromLifecycle();
 		result.messages = [makeCommandMessage(result)];
 		onUpdate?.(result);
 	};
@@ -98,7 +108,6 @@ export async function runCommandTask(
 	let timeout: NodeJS.Timeout | undefined;
 	let sigkillTimeout: NodeJS.Timeout | undefined;
 	let wasAborted = false;
-	let terminating = false;
 
 	const exitCode = await new Promise<number>((resolve) => {
 		const proc = spawn(input.command, {
@@ -108,13 +117,12 @@ export async function runCommandTask(
 			detached: process.platform !== "win32",
 			stdio: ["ignore", "pipe", "pipe"],
 		});
+		markSubprocessActivity(lifecycle);
 
 		const terminate = (timedOut: boolean) => {
-			if (result.exitCode !== -1 || terminating) return;
-			terminating = true;
+			const changed = markSubprocessTerminating(lifecycle, timedOut ? "timeout" : "aborted", { timedOut });
+			if (!changed) return;
 			wasAborted = !timedOut;
-			result.timedOut = timedOut;
-			result.stopReason = timedOut ? "timeout" : "aborted";
 			killCommandProcess(proc, "SIGTERM");
 			sigkillTimeout = setTimeout(() => killCommandProcess(proc, "SIGKILL"), 5000);
 			updateMessage();
@@ -125,6 +133,7 @@ export async function runCommandTask(
 			result.stdout = next.text;
 			result.stdoutTruncated = Boolean(result.stdoutTruncated || next.truncated);
 			result.stdoutBytes = next.bytes;
+			markSubprocessActivity(lifecycle);
 			updateMessage();
 		});
 
@@ -133,17 +142,21 @@ export async function runCommandTask(
 			result.stderr = next.text;
 			result.stderrTruncated = Boolean(result.stderrTruncated || next.truncated);
 			result.stderrBytes = next.bytes;
+			markSubprocessActivity(lifecycle);
 			updateMessage();
 		});
 
 		proc.on("close", (code) => {
 			if (timeout) clearTimeout(timeout);
 			if (sigkillTimeout) clearTimeout(sigkillTimeout);
-			resolve(code ?? (result.timedOut ? 124 : 1));
+			const finalCode = code ?? (lifecycle.timedOut ? 124 : 1);
+			markSubprocessClosed(lifecycle, finalCode);
+			resolve(finalCode);
 		});
 
 		proc.on("error", (error) => {
-			result.errorMessage = error.message;
+			recordSubprocessError(lifecycle, error.message);
+			markSubprocessClosed(lifecycle, 1);
 			resolve(1);
 		});
 
@@ -154,8 +167,8 @@ export async function runCommandTask(
 		}
 	});
 
-	result.exitCode = exitCode;
-	result.durationMs = Date.now() - startedAt;
+	if (lifecycle.exitCode === undefined) markSubprocessClosed(lifecycle, exitCode);
+	updateFromLifecycle();
 	if (result.timedOut && !result.stderr.includes("Command timed out")) {
 		const next = appendCapped(result.stderr, `${result.stderr ? "\n" : ""}Command timed out after ${timeoutMs}ms.`, maxOutputBytes);
 		result.stderr = next.text;

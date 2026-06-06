@@ -9,6 +9,7 @@ import type { Message } from "@earendil-works/pi-ai";
 import type { AgentConfig } from "./agents.ts";
 import { getSubagentsFileName, isPathInside, resolveLocationalAgentId, scanLocationalAgents } from "./agents.ts";
 import { ADVERTISE_LOCATIONAL_AGENTS_ENV, DEFAULT_KNOWN_TOOLS, LEGACY_ADVERTISE_LOCATIONAL_AGENTS_ENV, LEGACY_ADVERTISE_SOURCE_AGENTS_ENV, LEGACY_SUBAGENT_CHILD_ENV, LEGACY_SUBAGENT_DEPTH_ENV, MAX_SUBPROCESS_DEPTH, ORCHESTRATED_CHILD_ENV, SUBPROCESS_CHILD_ENV, SUBPROCESS_DEPTH_ENV } from "./constants.ts";
+import { createSubprocessLifecycle, getSubprocessLifecycleSnapshot, markSubprocessActivity, markSubprocessClosed, markSubprocessTerminating, recordSubprocessError } from "./lifecycle.ts";
 import { getFinalOutput, makeErrorResult } from "./result.ts";
 import { formatWrongIntentReason, getRequiredSessionIntent, getWrongIntentRetry, persistSubagentState, subagentSettings, updateTrackedSession } from "./state.ts";
 import { getLocationalLoopError, makeChildLocationalEnv, notifyLocationalBoundaryDiscovered } from "./locational-guard.ts";
@@ -205,6 +206,7 @@ export async function runDelegation(
 	let tmpPromptDir: string | null = null;
 	let tmpPromptPath: string | null = null;
 
+	const lifecycle = createSubprocessLifecycle("subagent", agent.id);
 	const currentResult: SingleResult = {
 		agent: agent.id,
 		agentOrigin: agent.origin,
@@ -221,8 +223,14 @@ export async function runDelegation(
 		cwd: effectiveCwd,
 	};
 
+	const updateLifecycleResultFields = () => {
+		const snapshot = getSubprocessLifecycleSnapshot(lifecycle);
+		if (snapshot.phase === "closed") currentResult.exitCode = snapshot.exitCode;
+	};
+
 	const emitUpdate = () => {
 		if (onUpdate) {
+			updateLifecycleResultFields();
 			onUpdate({
 				content: [{ type: "text", text: getFinalOutput(currentResult.messages) || "(running...)" }],
 				details: makeDetails([currentResult]),
@@ -257,10 +265,12 @@ export async function runDelegation(
 				shell: false,
 				stdio: ["ignore", "pipe", "pipe"],
 			});
+			markSubprocessActivity(lifecycle);
 			let buffer = "";
 
 			const processLine = (line: string) => {
 				if (!line.trim()) return;
+				markSubprocessActivity(lifecycle);
 				let event: any;
 				try {
 					event = JSON.parse(line);
@@ -297,6 +307,7 @@ export async function runDelegation(
 			};
 
 			proc.stdout.on("data", (data) => {
+				markSubprocessActivity(lifecycle);
 				buffer += data.toString();
 				const lines = buffer.split("\n");
 				buffer = lines.pop() || "";
@@ -304,20 +315,27 @@ export async function runDelegation(
 			});
 
 			proc.stderr.on("data", (data) => {
+				markSubprocessActivity(lifecycle);
 				currentResult.stderr += data.toString();
 			});
 
 			proc.on("close", (code) => {
 				if (buffer.trim()) processLine(buffer);
-				resolve(code ?? 0);
+				const finalCode = code ?? 0;
+				markSubprocessClosed(lifecycle, finalCode);
+				resolve(finalCode);
 			});
 
-			proc.on("error", () => {
+			proc.on("error", (error) => {
+				recordSubprocessError(lifecycle, error.message);
+				markSubprocessClosed(lifecycle, 1);
 				resolve(1);
 			});
 
 			if (signal) {
 				const killProc = () => {
+					const changed = markSubprocessTerminating(lifecycle, "aborted", { timedOut: false });
+					if (!changed) return;
 					wasAborted = true;
 					proc.kill("SIGTERM");
 					setTimeout(() => {
@@ -329,7 +347,8 @@ export async function runDelegation(
 			}
 		});
 
-		currentResult.exitCode = exitCode;
+		if (lifecycle.exitCode === undefined) markSubprocessClosed(lifecycle, exitCode);
+		updateLifecycleResultFields();
 		if (wasAborted) throw new Error("Subprocess agent was aborted");
 		updateTrackedSession(ctx, agent, subagentSessionId, currentResult);
 		if (agent.resumable) persistSubagentState(pi);
