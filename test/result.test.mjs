@@ -46,7 +46,7 @@ test("getResultOutput prefers warning, final output, next intent, and error text
 			nextSessionIntent: "resume",
 			messages: [assistant([{ type: "text", text: "done" }])],
 		}),
-		'Warning: careful\n\ndone\n\nNext call to this subagent should use session: "resume"',
+		'Warning: careful\n\ndone\n\nNext call to this subprocess agent should use session: "resume"',
 	);
 	assert.equal(
 		getResultOutput({ exitCode: 1, errorMessage: "boom", stderr: "stderr", messages: [] }),
@@ -65,16 +65,18 @@ test("getDisplayItems and getNestedSubagentIds extract assistant text and tool c
 	const messages = [
 		assistant([
 			{ type: "text", text: "thinking" },
-			{ type: "toolCall", name: "subagent", arguments: { tasks: [{ id: "a" }, { agent: "b" }] } },
+			{ type: "toolCall", name: "subprocess", arguments: { tasks: [{ id: "a" }, { agent: "b" }] } },
+			{ type: "toolCall", name: "subagent", arguments: { id: "legacy" } },
 			{ type: "toolCall", name: "read", arguments: { path: "x" } },
 		]),
 	];
 	assert.deepEqual(getDisplayItems(messages), [
 		{ type: "text", text: "thinking" },
-		{ type: "toolCall", name: "subagent", args: { tasks: [{ id: "a" }, { agent: "b" }] } },
+		{ type: "toolCall", name: "subprocess", args: { tasks: [{ id: "a" }, { agent: "b" }] } },
+		{ type: "toolCall", name: "subagent", args: { id: "legacy" } },
 		{ type: "toolCall", name: "read", args: { path: "x" } },
 	]);
-	assert.deepEqual(getNestedSubagentIds(messages), ["a", "b"]);
+	assert.deepEqual(getNestedSubagentIds(messages), ["a", "b", "legacy"]);
 });
 
 test("formatUsageStats formats nonzero stats compactly", () => {

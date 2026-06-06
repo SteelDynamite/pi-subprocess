@@ -16,10 +16,12 @@ export interface UsageStats {
 	turns: number;
 }
 
-export interface SubagentSettings {
+export interface SubprocessSettings {
 	reuseEnabled: boolean;
 	contextThreshold: number;
 }
+
+export type SubagentSettings = SubprocessSettings;
 
 export interface TrackedSession {
 	mainSessionKey: string;
@@ -32,10 +34,12 @@ export interface TrackedSession {
 	updatedAt: number;
 }
 
-export interface PersistedSubagentState {
-	settings: SubagentSettings;
+export interface PersistedSubprocessState {
+	settings: SubprocessSettings;
 	sessions: TrackedSession[];
 }
+
+export type PersistedSubagentState = PersistedSubprocessState;
 
 export interface WrongSessionIntentError {
 	agentId: string;
@@ -74,7 +78,7 @@ export interface SingleResult {
 	nextSessionIntent?: SessionIntent;
 }
 
-export interface SubagentDetails {
+export interface SubprocessDetails {
 	mode: "single" | "parallel" | "chain";
 	agentScope: AgentScope;
 	includeLocationalAgents: boolean;
@@ -82,6 +86,8 @@ export interface SubagentDetails {
 	locationalAgents: string[];
 	results: SingleResult[];
 }
+
+export type SubagentDetails = SubprocessDetails;
 
 export type DisplayItem = { type: "text"; text: string } | { type: "toolCall"; name: string; args: Record<string, any> };
 

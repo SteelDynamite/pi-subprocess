@@ -92,13 +92,13 @@ test("updateTrackedSession marks failed or missing-session resumable calls as ne
 	assert.equal(missingSession.nextSessionIntent, "new");
 });
 
-test("restoreSubagentState uses latest custom state entry", () => {
+test("restoreSubagentState uses latest subprocess or legacy custom state entry", () => {
 	resetState();
 	const branch = [
 		{ type: "custom", customType: "subagent-state", data: { settings: { reuseEnabled: false, contextThreshold: 0.5 }, sessions: [] } },
 		{
 			type: "custom",
-			customType: "subagent-state",
+			customType: "subprocess-state",
 			data: {
 				settings: { reuseEnabled: true, contextThreshold: 0.8 },
 				sessions: [{ mainSessionKey: "session-2", agentId: "agent-a", sessionId: "child", nextIntent: "resume", reason: "under-threshold", contextTokens: 10, updatedAt: 1 }],

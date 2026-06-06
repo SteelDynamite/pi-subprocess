@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "./agents.ts";
-import { DEFAULT_CONTEXT_THRESHOLD, SUBAGENT_STATE_ENTRY } from "./constants.ts";
+import { DEFAULT_CONTEXT_THRESHOLD, LEGACY_SUBAGENT_STATE_ENTRY, SUBPROCESS_STATE_ENTRY } from "./constants.ts";
 import { isFailedResult } from "./result.ts";
 import type { NextIntentReason, PersistedSubagentState, SessionIntent, SingleResult, SubagentSettings, TrackedSession } from "./types.ts";
 
@@ -17,11 +17,11 @@ function getSessionRecordKey(ctx: ExtensionContext, agentId: string): string {
 	return `${getMainSessionKey(ctx)}\0${agentId}`;
 }
 
-export function restoreSubagentState(ctx: ExtensionContext) {
+export function restoreSubprocessState(ctx: ExtensionContext) {
 	const branchEntries = ctx.sessionManager.getBranch();
 	let latest: PersistedSubagentState | undefined;
 	for (const entry of branchEntries) {
-		if (entry.type === "custom" && entry.customType === SUBAGENT_STATE_ENTRY) {
+		if (entry.type === "custom" && (entry.customType === SUBPROCESS_STATE_ENTRY || entry.customType === LEGACY_SUBAGENT_STATE_ENTRY)) {
 			latest = entry.data as PersistedSubagentState | undefined;
 		}
 	}
@@ -36,12 +36,16 @@ export function restoreSubagentState(ctx: ExtensionContext) {
 	}
 }
 
-export function persistSubagentState(pi: ExtensionAPI) {
-	pi.appendEntry<PersistedSubagentState>(SUBAGENT_STATE_ENTRY, {
+export const restoreSubagentState = restoreSubprocessState;
+
+export function persistSubprocessState(pi: ExtensionAPI) {
+	pi.appendEntry<PersistedSubagentState>(SUBPROCESS_STATE_ENTRY, {
 		settings: subagentSettings,
 		sessions: Array.from(trackedSessions.values()),
 	});
 }
+
+export const persistSubagentState = persistSubprocessState;
 
 export function toggleReuse() {
 	subagentSettings.reuseEnabled = !subagentSettings.reuseEnabled;
@@ -67,7 +71,7 @@ export function getWrongIntentRetry(required: SessionIntent, reason: NextIntentR
 
 export function formatWrongIntentReason(agent: AgentConfig, requested: SessionIntent, required: SessionIntent, reason: NextIntentReason): string {
 	const retry = getWrongIntentRetry(required, reason);
-	if (!agent.resumable) return `Wrong session intent for "${agent.id}": requested "${requested}", required "new" because this subagent is not resumable. ${retry}`;
+	if (!agent.resumable) return `Wrong session intent for "${agent.id}": requested "${requested}", required "new" because this subprocess agent is not resumable. ${retry}`;
 	if (reason === "reuse-disabled") return `Wrong session intent for "${agent.id}": requested "${requested}", required "new" because resumable session reuse is disabled. ${retry}`;
 	if (reason === "over-threshold") return `Wrong session intent for "${agent.id}": requested "${requested}", required "new" because the locational session is over the context limit. ${retry}`;
 	if (reason === "none") return `Wrong session intent for "${agent.id}": requested "${requested}", required "new" because no prior reusable session exists. ${retry}`;

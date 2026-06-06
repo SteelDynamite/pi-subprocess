@@ -1,7 +1,7 @@
 ---
 description: Worker implements, reviewer reviews, worker applies feedback
 ---
-Use the subagent tool with the chain parameter to execute this workflow:
+Use the subprocess tool with the chain parameter to execute this workflow:
 
 1. First, use id "worker" with session "new" to implement: $@
 2. Then, use id "reviewer" with session "new" to review the implementation from the previous step (use {previous} placeholder)

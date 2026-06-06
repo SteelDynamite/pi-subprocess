@@ -80,7 +80,7 @@ export function getResultOutput(result: SingleResult): string {
 	if (result.kind === "command") return formatCommandResultOutput(result);
 	const warning = result.warning ? `Warning: ${result.warning}\n\n` : "";
 	const nextIntent = result.nextSessionIntent
-		? `\n\nNext call to this subagent should use session: "${result.nextSessionIntent}"`
+		? `\n\nNext call to this subprocess agent should use session: "${result.nextSessionIntent}"`
 		: "";
 	if (isFailedResult(result)) {
 		return warning + (result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)");
@@ -114,7 +114,7 @@ export function getDisplayItems(messages: Message[]): DisplayItem[] {
 
 export function getNestedSubagentIds(messages: Message[]): string[] {
 	return getDisplayItems(messages)
-		.filter((item): item is Extract<DisplayItem, { type: "toolCall" }> => item.type === "toolCall" && item.name === "subagent")
+		.filter((item): item is Extract<DisplayItem, { type: "toolCall" }> => item.type === "toolCall" && (item.name === "subprocess" || item.name === "subagent"))
 		.flatMap((item) => {
 			const args = item.args as any;
 			if (args.chain && Array.isArray(args.chain)) return args.chain.map((step: any) => getAgentId(step)).filter(Boolean);

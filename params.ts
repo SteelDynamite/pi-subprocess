@@ -33,7 +33,7 @@ export function getMissingSessionError(params: any): string | undefined {
 		if (missingIndex >= 0) return `Missing required session intent for parallel task ${missingIndex + 1}; set session to "new" or "resume".`;
 	}
 	if (getAgentId(params) && params.task && !params.session) {
-		return 'Missing required session intent for single subagent call; set session to "new" or "resume".';
+		return 'Missing required session intent for single subprocess-agent call; set session to "new" or "resume".';
 	}
 	return undefined;
 }

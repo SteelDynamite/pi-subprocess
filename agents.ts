@@ -61,9 +61,9 @@ const SKIP_LOCATIONAL_SCAN_DIRS = new Set([
 	"bin",
 ]);
 
-const DEFAULT_LOCATIONAL_PROMPT = `You are a locational subagent. This directory is your source root.
+const DEFAULT_LOCATIONAL_PROMPT = `You are a locational subprocess agent. This directory is your source root.
 
-Work only within this source root unless the task explicitly asks otherwise. If you discover nested locational folders listed in <available-subagents>, delegate work inside them instead of inspecting or modifying them directly.`;
+Work only within this source root unless the task explicitly asks otherwise. If you discover nested locational folders listed in <available-subprocess-agents>, delegate work inside them instead of inspecting or modifying them directly.`;
 
 function isDirectory(p: string): boolean {
 	try {
@@ -262,8 +262,8 @@ export function scanLocationalAgents(
 	const roots: AgentConfig[] = [];
 	const errors: string[] = [];
 	const start = path.resolve(cwd);
-	const maxDepth = options.maxDepth ?? readPositiveIntegerEnv("PI_SUBAGENT_LOCATIONAL_SCAN_MAX_DEPTH", DEFAULT_LOCATIONAL_SCAN_MAX_DEPTH);
-	const timeoutMs = options.timeoutMs ?? readPositiveIntegerEnv("PI_SUBAGENT_LOCATIONAL_SCAN_TIMEOUT_MS", DEFAULT_LOCATIONAL_SCAN_TIMEOUT_MS);
+	const maxDepth = options.maxDepth ?? readPositiveIntegerEnv("PI_SUBPROCESS_LOCATIONAL_SCAN_MAX_DEPTH", readPositiveIntegerEnv("PI_SUBAGENT_LOCATIONAL_SCAN_MAX_DEPTH", DEFAULT_LOCATIONAL_SCAN_MAX_DEPTH));
+	const timeoutMs = options.timeoutMs ?? readPositiveIntegerEnv("PI_SUBPROCESS_LOCATIONAL_SCAN_TIMEOUT_MS", readPositiveIntegerEnv("PI_SUBAGENT_LOCATIONAL_SCAN_TIMEOUT_MS", DEFAULT_LOCATIONAL_SCAN_TIMEOUT_MS));
 	const startedAt = Date.now();
 	let timedOut = false;
 
@@ -305,7 +305,7 @@ export function scanLocationalAgents(
 
 	visit(start, 1);
 	if (timedOut) {
-		errors.push(`Locational subagent scan stopped after ${timeoutMs}ms. Increase PI_SUBAGENT_LOCATIONAL_SCAN_TIMEOUT_MS if needed.`);
+		errors.push(`Locational agent scan stopped after ${timeoutMs}ms. Increase PI_SUBPROCESS_LOCATIONAL_SCAN_TIMEOUT_MS if needed.`);
 	}
 	return { agents: roots, errors };
 }

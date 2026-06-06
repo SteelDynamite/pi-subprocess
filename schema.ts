@@ -12,7 +12,7 @@ const HandoffDocFields = {
 };
 
 const TaskItem = Type.Object({
-	id: Type.Optional(Type.String({ description: "Subagent id to invoke" })),
+	id: Type.Optional(Type.String({ description: "Subprocess agent id to invoke" })),
 	agent: Type.Optional(Type.String({ description: "Deprecated alias for id" })),
 	session: SessionIntentSchema,
 	task: Type.String({ description: "Task to delegate to the agent" }),
@@ -21,7 +21,7 @@ const TaskItem = Type.Object({
 });
 
 const ChainItem = Type.Object({
-	id: Type.Optional(Type.String({ description: "Subagent id to invoke" })),
+	id: Type.Optional(Type.String({ description: "Subprocess agent id to invoke" })),
 	agent: Type.Optional(Type.String({ description: "Deprecated alias for id" })),
 	session: SessionIntentSchema,
 	task: Type.String({ description: "Task with optional {previous} placeholder for prior output" }),
@@ -42,14 +42,14 @@ const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
 	default: "user",
 });
 
-export const SubagentParams = Type.Object({
-	id: Type.Optional(Type.String({ description: "Subagent id to invoke (for single mode)" })),
+export const SubprocessParams = Type.Object({
+	id: Type.Optional(Type.String({ description: "Subprocess agent id to invoke (for single mode)" })),
 	agent: Type.Optional(Type.String({ description: "Deprecated alias for id (single mode)" })),
 	session: Type.Optional(SessionIntentSchema),
 	task: Type.Optional(Type.String({ description: "Task to delegate (for single mode)" })),
 	...HandoffDocFields,
-	tasks: Type.Optional(Type.Array(TaskItem, { description: "Array of {id, session, task} for parallel subagent execution" })),
-	chain: Type.Optional(Type.Array(ChainItem, { description: "Array of {id, session, task} for sequential subagent execution" })),
+	tasks: Type.Optional(Type.Array(TaskItem, { description: "Array of {id, session, task} for parallel subprocess-agent execution" })),
+	chain: Type.Optional(Type.Array(ChainItem, { description: "Array of {id, session, task} for sequential subprocess-agent execution" })),
 	commands: Type.Optional(Type.Array(CommandItem, { description: "Array of foreground-managed shell command tasks. Runs with bounded concurrency, waits for completion, and returns consolidated output." })),
 	agentScope: Type.Optional(AgentScopeSchema),
 	confirmProjectAgents: Type.Optional(
@@ -63,3 +63,5 @@ export const SubagentParams = Type.Object({
 	),
 	cwd: Type.Optional(Type.String({ description: "Optional legacy cwd override for behavioral agents (single mode); omit normally" })),
 });
+
+export const SubagentParams = SubprocessParams;

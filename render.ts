@@ -75,17 +75,16 @@ function formatToolCall(
 	}
 }
 
-export function renderSubagentCall(args: any, theme: any, _context: any) {
+export function renderSubprocessCall(args: any, theme: any, _context: any) {
 			const scope: AgentScope = args.agentScope ?? "user";
 			const formatCallSession = (session?: SessionIntent) => session ? theme.fg("muted", ` [session:${session}]`) : "";
 			if (args.chain && args.chain.length > 0) {
 				let text =
-					theme.fg("toolTitle", theme.bold("subagent ")) +
+					theme.fg("toolTitle", theme.bold("subprocess ")) +
 					theme.fg("accent", `chain (${args.chain.length} steps)`) +
 					theme.fg("muted", ` [${scope}]`);
 				for (let i = 0; i < Math.min(args.chain.length, 3); i++) {
 					const step = args.chain[i];
-					// Clean up {previous} placeholder for display
 					const cleanTask = step.task.replace(/\{previous\}/g, "").trim();
 					const preview = cleanTask.length > 40 ? `${cleanTask.slice(0, 40)}...` : cleanTask;
 					text +=
@@ -101,7 +100,7 @@ export function renderSubagentCall(args: any, theme: any, _context: any) {
 			}
 			if (args.tasks && args.tasks.length > 0) {
 				let text =
-					theme.fg("toolTitle", theme.bold("subagent ")) +
+					theme.fg("toolTitle", theme.bold("subprocess ")) +
 					theme.fg("accent", `parallel (${args.tasks.length} tasks)`) +
 					theme.fg("muted", ` [${scope}]`);
 				for (const t of args.tasks.slice(0, 3)) {
@@ -113,7 +112,7 @@ export function renderSubagentCall(args: any, theme: any, _context: any) {
 			}
 			if (args.commands && args.commands.length > 0) {
 				let text =
-					theme.fg("toolTitle", theme.bold("subagent ")) +
+					theme.fg("toolTitle", theme.bold("subprocess ")) +
 					theme.fg("accent", `commands (${args.commands.length} tasks)`);
 				for (const commandTask of args.commands.slice(0, 3)) {
 					const command = commandTask.command || "...";
@@ -126,7 +125,7 @@ export function renderSubagentCall(args: any, theme: any, _context: any) {
 			const agentName = getAgentId(args) || "...";
 			const preview = args.task ? (args.task.length > 60 ? `${args.task.slice(0, 60)}...` : args.task) : "...";
 			let text =
-				theme.fg("toolTitle", theme.bold("subagent ")) +
+				theme.fg("toolTitle", theme.bold("subprocess ")) +
 				theme.fg("accent", agentName) +
 				formatCallSession(args.session) +
 				theme.fg("muted", ` [${scope}]`);
@@ -134,7 +133,7 @@ export function renderSubagentCall(args: any, theme: any, _context: any) {
 			return new Text(text, 0, 0);
 		}
 
-export function renderSubagentResult(result: any, { expanded }: { expanded: boolean }, theme: any, _context: any) {
+export function renderSubprocessResult(result: any, { expanded }: { expanded: boolean }, theme: any, _context: any) {
 			const details = result.details as SubagentDetails | undefined;
 			const formatResultSession = (r: SingleResult) => r.sessionIntent ? theme.fg("muted", ` [session:${r.sessionIntent}]`) : "";
 			if (!details || details.results.length === 0) {
@@ -165,7 +164,7 @@ export function renderSubagentResult(result: any, { expanded }: { expanded: bool
 				if (!wrong) return undefined;
 				return [
 					"Wrong session intent",
-					`Subagent: ${wrong.agentId}`,
+					`Agent: ${wrong.agentId}`,
 					`Requested: session:${wrong.requested}`,
 					`Required: session:${wrong.required}`,
 					`Retry: ${wrong.recommendedRetry}`,
@@ -436,3 +435,6 @@ export function renderSubagentResult(result: any, { expanded }: { expanded: bool
 			const text = result.content[0];
 			return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
 		}
+
+export const renderSubagentCall = renderSubprocessCall;
+export const renderSubagentResult = renderSubprocessResult;

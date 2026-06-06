@@ -1,5 +1,5 @@
 {
-  "name": "pi-subagent",
+  "name": "pi-subprocess",
   "version": "0.0.0",
   "type": "module",
   "keywords": [

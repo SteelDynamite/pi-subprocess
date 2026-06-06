@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { discoverAgents, isPathInside, loadLocationalAgent, resolveLocationalAgentId, scanLocationalAgents } from "../agents.ts";
 
 function tempDir() {
-	return mkdtempSync(join(tmpdir(), "pi-subagent-agents-test-"));
+	return mkdtempSync(join(tmpdir(), "pi-subprocess-agents-test-"));
 }
 
 test("loadLocationalAgent parses frontmatter, defaults, and same-root @includes", () => {

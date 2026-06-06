@@ -1,219 +1,146 @@
-# Subagent Example
+# Pi Subprocess
 
-Delegate tasks to specialized subagents with isolated context windows.
+Foreground-managed subprocess orchestration for Pi Coding Agent.
+
+Run specialized Pi agents with isolated contexts, or run shell commands, while the parent agent waits for consolidated results. Detached/fire-and-forget jobs are intentionally out of scope.
 
 ## Features
 
-- **Isolated context**: Each subagent runs in a separate `pi` process
-- **Streaming output**: See tool calls and progress as they happen
-- **Parallel streaming**: All parallel tasks stream updates simultaneously
-- **Markdown rendering**: Final output rendered with proper formatting (expanded view)
-- **Usage tracking**: Shows turns, tokens, cost, and context usage per agent
-- **Abort support**: Ctrl+C propagates to kill subagent processes
-- **Command subprocesses**: Run shell commands with bounded foreground parallelism and consolidated results
+- **Agent subprocesses**: behavioral and locational Pi agents run in separate `pi` processes.
+- **Command subprocesses**: shell commands run with bounded foreground parallelism.
+- **Streaming progress**: single, parallel, chain, and command modes stream status.
+- **Consolidated results**: parent receives final output, exit status, cwd, stderr/stdout, usage, and truncation metadata.
+- **Abort support**: Ctrl+C propagates to child processes.
+- **Compatibility**: the legacy `subagent` tool and package-era API aliases remain supported.
 
 ## Structure
 
 ```
-subagent/
-├── README.md            # This file
-├── index.ts             # The extension (entry point)
-├── agents.ts            # Agent discovery logic
-├── agents/              # Sample agent definitions
-│   ├── scout/SUBAGENTS.md     # Fast recon, returns compressed context
-│   ├── planner/SUBAGENTS.md   # Creates implementation plans
-│   ├── reviewer/SUBAGENTS.md  # Code review
-│   └── worker/SUBAGENTS.md    # General-purpose (full capabilities)
-└── prompts/             # Workflow presets (prompt templates)
-    ├── implement.md     # scout -> planner -> worker
-    ├── scout-and-plan.md    # scout -> planner (no implementation)
-    └── implement-and-review.md  # worker -> reviewer -> worker
+pi-subprocess/
+├── README.md
+├── index.ts
+├── agents.ts
+├── command.ts
+├── locational-guard.ts
+├── agents/
+│   ├── scout/SUBAGENTS.md
+│   ├── planner/SUBAGENTS.md
+│   ├── reviewer/SUBAGENTS.md
+│   └── worker/SUBAGENTS.md
+└── prompts/
+    ├── implement.md
+    ├── scout-and-plan.md
+    └── implement-and-review.md
 ```
 
 ## Installation
 
-From the repository root, symlink the files:
+From this repository root:
 
 ```bash
-# Symlink the extension (must be in a subdirectory with index.ts)
-mkdir -p ~/.pi/agent/extensions/subagent
-ln -sf "$(pwd)/packages/coding-agent/examples/extensions/subagent/index.ts" ~/.pi/agent/extensions/subagent/index.ts
-ln -sf "$(pwd)/packages/coding-agent/examples/extensions/subagent/agents.ts" ~/.pi/agent/extensions/subagent/agents.ts
+mkdir -p ~/.pi/agent/extensions/subprocess
+ln -sf "$(pwd)/index.ts" ~/.pi/agent/extensions/subprocess/index.ts
 
-# Symlink agents
 mkdir -p ~/.pi/agent/agents
-for d in packages/coding-agent/examples/extensions/subagent/agents/*; do
+for d in agents/*; do
   ln -sfn "$(pwd)/$d" ~/.pi/agent/agents/$(basename "$d")
 done
 
-# Symlink workflow prompts
 mkdir -p ~/.pi/agent/prompts
-for f in packages/coding-agent/examples/extensions/subagent/prompts/*.md; do
+for f in prompts/*.md; do
   ln -sf "$(pwd)/$f" ~/.pi/agent/prompts/$(basename "$f")
 done
 ```
 
-## Security Model
+Legacy installs under `~/.pi/agent/extensions/subagent` can continue while migrating.
 
-This tool executes a separate `pi` subprocess with a delegated system prompt and tool/model configuration. Subagent child processes receive `PI_SUBAGENT_CHILD=1` and `PI_ORCHESTRATED_CHILD=1` in their environment.
+## Tool
 
-**Project-local behavioral agents** (`.pi/agents/<id>/SUBAGENTS.md`) and **locational agents** (`<source-root>/SUBAGENTS.md`) are repo-controlled prompts that can instruct the model to read files, run bash commands, etc.
+Primary tool: `subprocess`.
 
-**Default behavior:** Only loads **user-level agents** from `~/.pi/agent/agents`.
+Compatibility alias: `subagent`.
 
-To enable project-local agents, pass `agentScope: "both"` (or `"project"`). Only do this for repositories you trust.
-
-When running interactively, the tool prompts for confirmation before running project-local agents. Set `confirmProjectAgents: false` to disable.
-
-## Usage
-
-### Single agent
-```
-Use scout to find all authentication code
-```
-
-### Parallel execution
-```
-Run 2 scouts in parallel: one to find models, one to find providers
-```
-
-### Command subprocesses
-```
-Use subagent commands to run npm test and npm run typecheck in parallel
-```
-
-Command subprocesses are foreground-managed: the tool streams progress, waits for all commands to finish, and returns consolidated exit status, duration, cwd, stdout, and stderr. They do not create detached jobs or jobId polling.
-
-### Chained workflow
-```
-Use a chain: first have scout find the read tool, then have planner suggest improvements
-```
-
-### Workflow prompts
-```
-/implement add Redis caching to the session store
-/scout-and-plan refactor auth to support OAuth
-/implement-and-review add input validation to API endpoints
-```
-
-## Tool Modes
+### Modes
 
 | Mode | Parameter | Description |
-|------|-----------|-------------|
-| Single | `{ id, session, task }` | One subagent id, required session intent (`"new"` or `"resume"`), one task (`agent` remains as a deprecated alias) |
-| Parallel | `{ tasks: [...] }` | Multiple `{ id, session, task }` tasks run concurrently (max 8, 4 concurrent) |
-| Chain | `{ chain: [...] }` | Sequential `{ id, session, task }` steps with `{previous}` placeholder |
-| Commands | `{ commands: [{ command, name?, cwd?, timeoutMs?, maxOutputBytes? }] }` | Foreground-managed shell command tasks with bounded concurrency and consolidated results |
-| Locational advertisement | `includeLocationalAgents?: boolean` | Allow behavioral-agent child sessions to advertise locational agents (default: `false`) |
+|---|---|---|
+| Single agent | `{ id, session, task }` | One behavioral or locational agent |
+| Parallel agents | `{ tasks: [{ id, session, task }] }` | Multiple agent subprocesses, max 8, concurrency 4 |
+| Chain | `{ chain: [{ id, session, task }] }` | Sequential agents; task may include `{previous}` |
+| Commands | `{ commands: [{ command, name?, cwd?, timeoutMs?, maxOutputBytes? }] }` | Foreground-managed shell commands |
 
-Working directory defaults:
-- Behavioral agents run from the caller's current cwd.
-- Locational agents run from the source root named by `id`.
-- `cwd` is a legacy behavioral-agent override; omit it for normal use.
-- `session` is required on every subagent call. Use `"new"` for a first/fresh prompt and `"resume"` only when the previous result said so.
-- `contextDocs` or `handoffDocs` may be set on single, parallel task, or chain step inputs. The child task is prefixed with a request to read those docs first; use this for relevant director/project docs when delegating to locational subagents.
-- Behavioral-agent child sessions do not advertise locational agents by default. Set `includeLocationalAgents: true` when a behavioral agent should orchestrate locational agents. Top-level locational delegation and locational-boundary enforcement still work.
-- Deprecated temporary alias: `includeSourceAgents` still maps to `includeLocationalAgents`.
+Agent calls require `session: "new" | "resume"`. Use `resume` only when the previous result says to.
 
-## Output Display
+### Examples
 
-**Collapsed view** (default):
-- Status icon (✓/✗/⏳), agent name, and session intent (`new`/`resume`)
-- Last 5-10 items (tool calls and text)
-- Usage stats: `3 turns ↑input ↓output RcacheRead WcacheWrite $cost ctx:contextTokens model`
-
-**Expanded view** (Ctrl+O):
-- Full task text
-- Agent/status metadata including session intent
-- All tool calls with formatted arguments
-- Final output rendered as Markdown
-- Per-task usage (for chain/parallel)
-
-**Parallel mode streaming**:
-- Shows all tasks with live status (⏳ running, ✓ done, ✗ failed)
-- Updates as each task makes progress
-- Shows "2/3 done, 1 running" status
-- Returns each completed task's final output to the parent model, capped at 50 KB per task
-- Returns failure diagnostics from stderr/error messages when a child exits before producing output
-
-**Command mode streaming**:
-- Runs `commands` entries with the same bounded concurrency as parallel subagents
-- Streams stdout/stderr progress while the parent waits
-- Returns one consolidated result with command, cwd, exit code, duration, stdout, stderr, and truncation flags
-- Supports per-command `timeoutMs` (default: 600000ms) and `maxOutputBytes`
-- On POSIX, timeout/abort cleanup signals the command process group before falling back to child-process signaling
-
-**Tool call formatting** (mimics built-in tools):
-- `$ command` for bash
-- `read ~/path:1-10` for read
-- `grep /pattern/ in ~/path` for grep
-- etc.
-
-## Agent Definitions
-
-Behavioral agents are folders containing `SUBAGENTS.md`; the folder name is the id. `name` frontmatter is not supported.
-
-```markdown
----
-description: What this agent does
-tools: read, grep, find, ls
-model: openai-codex/gpt-5.5, openai-codex/gpt-5.4-mini
-manifest: true
-resumable: false
----
-
-System prompt for the agent goes here.
+```json
+{ "commands": [{ "name": "tests", "command": "npm test" }, { "name": "types", "command": "npm run typecheck" }] }
 ```
 
-**Locations:**
-- `~/.pi/agent/agents/<id>/SUBAGENTS.md` - User-level (always loaded)
-- `.pi/agents/<id>/SUBAGENTS.md` - Project-level (only with `agentScope: "project"` or `"both"`)
+```json
+{ "id": "scout", "session": "new", "task": "Find authentication code" }
+```
 
-Project agents override user agents with the same id when `agentScope: "both"`.
+## Agent Types
 
-## Locational Agents
+### Behavioral agents
 
-Any descendant folder containing `SUBAGENTS.md` becomes a locational boundary. The manifest advertises locational agents by absolute path id, unless `manifest: false` is set. Direct reads/edits/searches/commands inside those folders are blocked; delegate with `id: "/absolute/source/root"` or a caller-cwd-relative path. The source root from `id` is used as the subagent cwd. Locational agents cannot delegate to their own current source root or another source root already in the delegation stack. Locational agents do not trigger a startup notification; boundary messages appear only when direct access is blocked during use. Behavioral-agent child sessions hide locational-agent advertisements unless the parent call sets `includeLocationalAgents: true`; locational-boundary guards remain active.
+Behavioral agents are folders containing `SUBAGENTS.md`:
 
-`SUBAGENTS.md` also replaces same-folder `AGENTS.md` by convention. When Pi starts in a locational-agent folder with `SUBAGENTS.md` but no same-folder `AGENTS.md` or `CLAUDE.md`, this extension injects `SUBAGENTS.md` in the same project-context shape Pi uses for context files. If same-folder context already exists, the extension injects `SUBAGENTS.md` after normal context and states that it is more specific.
+- bundled: this repo's `agents/<id>/SUBAGENTS.md`
+- user: `~/.pi/agent/agents/<id>/SUBAGENTS.md`
+- project: `.pi/agents/<id>/SUBAGENTS.md` when `agentScope` is `project` or `both`
 
-Only these frontmatter fields are supported: `description`, `tools`, `model`, `manifest`, `resumable`. If `tools` is present, it is an exact allowlist; omit it to inherit defaults. If `model` is a comma-separated list, the first configured/available model is used; otherwise the caller model is used with a warning. `resumable` defaults to `false` for behavioral agents and `true` for locational agents.
+Project-local behavioral agents are repo-controlled prompts. Only enable them for trusted repositories.
 
-Locational-agent discovery is bounded so starting Pi from broad folders does not scan indefinitely. Defaults: max depth `6`, timeout `500ms`. Override with `PI_SUBAGENT_LOCATIONAL_SCAN_MAX_DEPTH` and `PI_SUBAGENT_LOCATIONAL_SCAN_TIMEOUT_MS`.
+### Locational agents
 
-## Resumable Sessions
+Any descendant folder containing `SUBAGENTS.md` becomes a locational boundary. The folder path is the agent id. Direct reads/edits/searches/commands inside such folders are blocked unless the user explicitly authorizes direct access for the current request.
 
-Resumable sessions are tracked per main session and subagent id. A resumable result reports only the next required intent: `Next call to this subagent should use session: "resume"` or `"new"`. Calls with the wrong intent are blocked before spawning; over-limit blocks say to craft a fresh-session task prompt. The context threshold defaults to 60%.
+Use the locational path as `id` to delegate instead. Locational agents run from their source root and cannot recursively delegate to their own current root or active ancestor stack.
 
-Use `/subagent-settings` to toggle reuse, set the context threshold, view active resumable sessions, or reset tracked resumable sessions for the current main session.
+`SUBAGENTS.md` also replaces same-folder `AGENTS.md` by convention. When Pi starts in a locational-agent folder with `SUBAGENTS.md` but no same-folder `AGENTS.md` or `CLAUDE.md`, this extension injects it as project context.
 
-## Sample Agents
+Supported frontmatter: `description`, `tools`, `model`, `manifest`, `resumable`.
 
-| Agent | Purpose | Model | Tools |
-|-------|---------|-------|-------|
-| `scout` | Fast codebase recon | Haiku | read, grep, find, ls, bash |
-| `planner` | Implementation plans | Sonnet | read, grep, find, ls |
-| `reviewer` | Code review | Sonnet | read, grep, find, ls, bash |
-| `worker` | General-purpose | Sonnet | (all default) |
+Locational discovery defaults: max depth `6`, timeout `500ms`. New env vars: `PI_SUBPROCESS_LOCATIONAL_SCAN_MAX_DEPTH`, `PI_SUBPROCESS_LOCATIONAL_SCAN_TIMEOUT_MS`. Legacy `PI_SUBAGENT_*` vars still work where applicable.
 
-## Workflow Prompts
+## Child Environment
 
-| Prompt | Flow |
-|--------|------|
-| `/implement <query>` | scout → planner → worker |
-| `/scout-and-plan <query>` | scout → planner |
-| `/implement-and-review <query>` | worker → reviewer → worker |
+Delegated child processes receive:
 
-## Error Handling
+- `PI_SUBPROCESS_CHILD=1`
+- `PI_ORCHESTRATED_CHILD=1`
 
-- **Exit code != 0**: Tool returns error with stderr/output
-- **stopReason "error"**: LLM error propagated with error message
-- **stopReason "aborted"**: User abort (Ctrl+C) kills subprocess, throws error
-- **Chain mode**: Stops at first failing step, reports which step failed
+Legacy compatibility also sets `PI_SUBAGENT_CHILD=1`.
 
-## Limitations
+## Settings
 
-- Output truncated to last 10 items in collapsed view (expand to see all)
-- Parallel model-visible output is capped at 50 KB per task; full results remain in tool details
-- Agents discovered fresh on each invocation (allows editing mid-session)
-- Parallel mode limited to 8 tasks, 4 concurrent
+Use `/subprocess-settings` to toggle resumable-session reuse, set the context threshold, view active sessions, or reset tracked sessions.
+
+Legacy alias: `/subagent-settings`.
+
+## Compatibility
+
+Preserved aliases:
+
+- tool: `subagent` → `subprocess`
+- parameter: `agent` → `id`
+- parameter: `includeSourceAgents` → `includeLocationalAgents`
+- state/env compatibility for existing `subagent-state` and `PI_SUBAGENT_*` markers
+
+## Non-goals
+
+- detached jobs
+- jobId polling
+- schedulers or recurring tasks
+- persistent daemons
+- external task-type plugins
+- cross-session job survival
+
+## Validation
+
+```bash
+npm test
+npm run typecheck
+```

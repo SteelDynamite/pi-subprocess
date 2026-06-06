@@ -1,7 +1,7 @@
 /**
- * Subagent Tool - Delegate tasks to specialized agents
+ * Subprocess Tool - Delegate tasks to specialized agents and command subprocesses
  *
- * Spawns a separate `pi` process for each subagent invocation,
+ * Spawns a separate `pi` process for each agent invocation,
  * giving it an isolated context window.
  *
  * Supports three modes:
@@ -10,7 +10,7 @@
  *   - Chain: { chain: [{ id: "name-or-location-path", session: "new|resume", task: "... {previous} ..." }, ...] }
  *   - Commands: { commands: [{ command: "npm test", cwd: ".", timeoutMs: 120000 }, ...] }
  *
- * Uses JSON mode to capture structured output from subagents.
+ * Uses JSON mode to capture structured output from subprocess agents.
  */
 
 import * as path from "node:path";
@@ -23,22 +23,49 @@ import {
 	isPathInside,
 	loadLocationalAgent,
 } from "./agents.ts";
-import { ADVERTISE_LOCATIONAL_AGENTS_ENV, DEFAULT_KNOWN_TOOLS, LEGACY_ADVERTISE_LOCATIONAL_AGENTS_ENV, MAX_CONCURRENCY, MAX_PARALLEL_TASKS } from "./constants.ts";
-import { runCommandTask } from "./command.ts";
+import { ADVERTISE_LOCATIONAL_AGENTS_ENV, DEFAULT_KNOWN_TOOLS, LEGACY_ADVERTISE_LOCATIONAL_AGENTS_ENV, LEGACY_ADVERTISE_SOURCE_AGENTS_ENV, LEGACY_CURRENT_LOCATIONAL_ROOT_ENV, MAX_CONCURRENCY, MAX_PARALLEL_TASKS } from "./constants.ts";
+import { runCommandTask, type CommandTaskInput } from "./command.ts";
 import { mapWithConcurrencyLimit, resolveAgent, runDelegation, setKnownToolNames, validateAgentTools } from "./execution.ts";
 import { addHandoffDocsToTask, getAgentId, getMissingSessionError } from "./params.ts";
 import { formatLocalLocationalPrompt, formatSubagentManifest } from "./prompt.ts";
 import { getFinalOutput, getResultOutput, isFailedResult, makeErrorResult, truncateParallelOutput } from "./result.ts";
-import { SubagentParams } from "./schema.ts";
+import { SubprocessParams } from "./schema.ts";
 import { commandFilesystemTargets, getGuardedLocationalRoots, getLocationalLoopError, notifyLocationalBoundaryDiscovered, resolveFilesystemTarget } from "./locational-guard.ts";
 import { getMainSessionKey, persistSubagentState, restoreSubagentState, subagentSettings, trackedSessions } from "./state.ts";
-import { renderSubagentCall, renderSubagentResult } from "./render.ts";
+import { renderSubprocessCall, renderSubprocessResult } from "./render.ts";
 import type { OnUpdateCallback, SessionIntent, SingleResult, SubagentDetails } from "./types.ts";
 
 export { getFinalOutput } from "./result.ts";
 
+type AgentTaskInput = {
+	id?: string;
+	agent?: string;
+	session?: SessionIntent;
+	task: string;
+	cwd?: string;
+	contextDocs?: string[];
+	handoffDocs?: string[];
+};
+
+type SubprocessToolParams = {
+	id?: string;
+	agent?: string;
+	session?: SessionIntent;
+	task?: string;
+	cwd?: string;
+	contextDocs?: string[];
+	handoffDocs?: string[];
+	tasks?: AgentTaskInput[];
+	chain?: AgentTaskInput[];
+	commands?: CommandTaskInput[];
+	agentScope?: AgentScope;
+	confirmProjectAgents?: boolean;
+	includeLocationalAgents?: boolean;
+	includeSourceAgents?: boolean;
+};
+
 function shouldAdvertiseLocationalAgents(): boolean {
-	const value = (process.env[ADVERTISE_LOCATIONAL_AGENTS_ENV] ?? process.env[LEGACY_ADVERTISE_LOCATIONAL_AGENTS_ENV])?.trim().toLowerCase();
+	const value = (process.env[ADVERTISE_LOCATIONAL_AGENTS_ENV] ?? process.env[LEGACY_ADVERTISE_LOCATIONAL_AGENTS_ENV] ?? process.env[LEGACY_ADVERTISE_SOURCE_AGENTS_ENV])?.trim().toLowerCase();
 	return value !== "0" && value !== "false" && value !== "no" && value !== "off";
 }
 
@@ -46,14 +73,14 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => restoreSubagentState(ctx));
 	pi.on("session_tree", async (_event, ctx) => restoreSubagentState(ctx));
 
-	pi.registerCommand("subagent-settings", {
-		description: "Configure subagent session reuse and context threshold",
-		handler: async (_args, ctx) => {
+	const settingsCommand = {
+		description: "Configure subprocess-agent session reuse and context threshold",
+		handler: async (_args: unknown, ctx: ExtensionContext) => {
 			restoreSubagentState(ctx);
 			while (true) {
 				const sessionKey = getMainSessionKey(ctx);
 				const active = Array.from(trackedSessions.values()).filter((record) => record.mainSessionKey === sessionKey);
-				const choice = await ctx.ui.select("Subagent settings", [
+				const choice = await ctx.ui.select("Subprocess settings", [
 					`Reuse: ${subagentSettings.reuseEnabled ? "enabled" : "disabled"}`,
 					`Context threshold: ${Math.round(subagentSettings.contextThreshold * 100)}%`,
 					`Active resumable sessions: ${active.length}`,
@@ -64,7 +91,7 @@ export default function (pi: ExtensionAPI) {
 				if (choice.startsWith("Reuse:")) {
 					subagentSettings.reuseEnabled = !subagentSettings.reuseEnabled;
 					persistSubagentState(pi);
-					ctx.ui.notify(`Subagent reuse ${subagentSettings.reuseEnabled ? "enabled" : "disabled"}.`, "info");
+					ctx.ui.notify(`Subprocess reuse ${subagentSettings.reuseEnabled ? "enabled" : "disabled"}.`, "info");
 				} else if (choice.startsWith("Context threshold:")) {
 					const input = await ctx.ui.input("Context threshold percent", String(Math.round(subagentSettings.contextThreshold * 100)));
 					if (!input) continue;
@@ -81,15 +108,17 @@ export default function (pi: ExtensionAPI) {
 						: active.map((record) => `${record.agentId}: next session \"${record.nextIntent}\"${record.contextWindow ? ` (${record.contextTokens}/${record.contextWindow} tokens)` : ""}`);
 					ctx.ui.notify(lines.join("\n"), "info");
 				} else if (choice === "Reset tracked resumable sessions") {
-					const ok = await ctx.ui.confirm("Reset subagent sessions?", "Clear tracked resumable subagent sessions for the current main session.");
+					const ok = await ctx.ui.confirm("Reset subprocess sessions?", "Clear tracked resumable subprocess-agent sessions for the current main session.");
 					if (!ok) continue;
 					for (const [key, record] of trackedSessions) if (record.mainSessionKey === sessionKey) trackedSessions.delete(key);
 					persistSubagentState(pi);
-					ctx.ui.notify("Tracked resumable subagent sessions reset.", "info");
+					ctx.ui.notify("Tracked resumable subprocess sessions reset.", "info");
 				}
 			}
 		},
-	});
+	};
+	pi.registerCommand("subprocess-settings", settingsCommand);
+	pi.registerCommand("subagent-settings", { ...settingsCommand, description: "Deprecated alias for subprocess-settings" });
 
 	pi.on("before_agent_start", async (event, ctx) => {
 		setKnownToolNames([
@@ -105,11 +134,11 @@ export default function (pi: ExtensionAPI) {
 
 		if (manifest) {
 			promptParts.push(
-				`Subagents can be delegated to with the subagent tool by id and required session intent ("new" or "resume"). Use session: "new" for a first/fresh call; use session: "resume" only when the previous result for that same subagent said to. Locational subagent ids are locational boundaries; by default, do not read, search, edit, or run commands inside those folders directly from this agent. If the user explicitly authorizes direct access for a specific source root and task, direct access is allowed for that user request only. Do not delegate a locational agent to its own current source root or an active source ancestor; the tool blocks recursive source loops.\n\n${manifest}`,
+				`Subprocess agents can be delegated to with the subprocess tool by id and required session intent ("new" or "resume"). The legacy subagent tool name remains available as an alias. Use session: "new" for a first/fresh call; use session: "resume" only when the previous result for that same subprocess agent said to. Locational agent ids are locational boundaries; by default, do not read, search, edit, or run commands inside those folders directly from this agent. If the user explicitly authorizes direct access for a specific source root and task, direct access is allowed for that user request only. Do not delegate a locational agent to its own current source root or an active source ancestor; the tool blocks recursive source loops.\n\n${manifest}`,
 			);
 		}
 
-		const skipLocalSubagents = process.env.PI_SUBAGENT_SKIP_LOCAL_SUBAGENTS;
+		const skipLocalSubagents = process.env[LEGACY_CURRENT_LOCATIONAL_ROOT_ENV];
 		if (advertiseLocationalAgents && (!skipLocalSubagents || path.resolve(skipLocalSubagents) !== path.resolve(ctx.cwd))) {
 			const local = loadLocationalAgent(ctx.cwd, { readBody: true });
 			if (local.agent) {
@@ -119,7 +148,7 @@ export default function (pi: ExtensionAPI) {
 
 		const configErrors = [...discovery.errors, ...discovery.agents.map(validateAgentTools).filter((error): error is string => Boolean(error))];
 		if (configErrors.length > 0) {
-			promptParts.push(`Subagent configuration errors:\n${configErrors.map((error) => `- ${error}`).join("\n")}`);
+			promptParts.push(`Subprocess agent configuration errors:\n${configErrors.map((error) => `- ${error}`).join("\n")}`);
 		}
 
 		if (promptParts.length === 0) return;
@@ -127,7 +156,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("tool_call", async (event, ctx) => {
-		if (event.toolName === "subagent") return;
+		if (event.toolName === "subprocess" || event.toolName === "subagent") return;
 		const locationalRoots = getGuardedLocationalRoots(ctx.cwd);
 		if (locationalRoots.length === 0) return;
 
@@ -157,30 +186,31 @@ export default function (pi: ExtensionAPI) {
 				notifyLocationalBoundaryDiscovered(ctx, root);
 				return {
 					block: true,
-					reason: `Locational boundary enforced: delegate to subagent id "${root}" instead of accessing it directly.`,
+					reason: `Locational boundary enforced: delegate to subprocess locational agent id "${root}" instead of accessing it directly.`,
 				};
 			}
 		}
 	});
 
-	pi.registerTool({
-		name: "subagent",
-		label: "Subagent",
+	const subprocessTool: any = {
+		name: "subprocess",
+		label: "Subprocess",
 		description: [
-			"Delegate tasks to specialized subagents with isolated context, or run foreground-managed command subprocesses.",
-			"Modes: single (id + session + task), parallel (tasks array), chain (sequential with {previous} placeholder), commands (command task array).",
-			"Every delegation must include session: \"new\" or \"resume\"; use \"resume\" only when the previous result for that subagent said so.",
+			"Run foreground-managed subprocess work: specialized Pi agents with isolated context, or shell commands.",
+			"Modes: single agent (id + session + task), parallel agents (tasks array), chain (sequential with {previous} placeholder), commands (command task array).",
+			"Every agent delegation must include session: \"new\" or \"resume\"; use \"resume\" only when the previous result for that subprocess agent said so.",
 			"Use id for behavioral agents and locational agents; behavioral agents run from the caller cwd by default, locational agents run from their source root.",
 			"Locational ids are absolute or caller-cwd-relative folders containing SUBAGENTS.md; direct access is allowed only when the user explicitly authorizes it for the current request; recursive locational delegation to the current source root or active source stack is blocked.",
-			"For locational subagents, include relevant director/project docs with contextDocs or handoffDocs so the child reads them before starting.",
+			"For locational agents, include relevant director/project docs with contextDocs or handoffDocs so the child reads them before starting.",
 			"Command tasks are foreground-managed: the tool streams progress, waits for completion, and returns consolidated results; it does not create detached jobs or jobId polling.",
 			"Behavioral-agent child sessions do not advertise locational agents by default; set includeLocationalAgents true when a behavioral agent should orchestrate locational agents.",
+			"Deprecated compatibility: subagent is an alias for this tool, and agent is an alias for id.",
 			'Default behavioral agent scope is "user" (from ~/.pi/agent/agents).',
 			'To enable project-local behavioral agents in .pi/agents, set agentScope: "both" (or "project").',
 		].join(" "),
-		parameters: SubagentParams,
+		parameters: SubprocessParams,
 
-		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+		async execute(_toolCallId: string, params: SubprocessToolParams, signal: AbortSignal | undefined, onUpdate: OnUpdateCallback | undefined, ctx: ExtensionContext) {
 			const agentScope: AgentScope = params.agentScope ?? "user";
 			const includeLocationalAgents = params.includeLocationalAgents ?? params.includeSourceAgents ?? false;
 			const discovery = discoverAgents(ctx.cwd, agentScope);
@@ -286,7 +316,7 @@ export default function (pi: ExtensionAPI) {
 					if (blockedRoot) {
 						notifyLocationalBoundaryDiscovered(ctx, blockedRoot);
 						return {
-							content: [{ type: "text", text: `Locational boundary enforced: delegate to subagent id "${blockedRoot}" instead of running a command inside it.` }],
+							content: [{ type: "text", text: `Locational boundary enforced: delegate to subprocess locational agent id "${blockedRoot}" instead of running a command inside it.` }],
 							details: makeDetails("parallel")([]),
 							isError: true,
 						};
@@ -366,7 +396,7 @@ export default function (pi: ExtensionAPI) {
 					const stepId = getAgentId(step);
 					if (!stepId) {
 						return {
-							content: [{ type: "text", text: `Chain stopped at step ${i + 1}: missing subagent id.` }],
+							content: [{ type: "text", text: `Chain stopped at step ${i + 1}: missing subprocess agent id.` }],
 							details: makeDetails("chain")(results),
 							isError: true,
 						};
@@ -394,7 +424,7 @@ export default function (pi: ExtensionAPI) {
 						ctx.cwd,
 						agents,
 						stepId,
-						step.session,
+						step.session as SessionIntent,
 						taskWithContext,
 						step.cwd,
 						i + 1,
@@ -466,14 +496,14 @@ export default function (pi: ExtensionAPI) {
 
 				const results = await mapWithConcurrencyLimit(params.tasks, MAX_CONCURRENCY, async (t, index) => {
 					const taskId = getAgentId(t);
-					if (!taskId) return makeErrorResult("(missing id)", t.task, "Missing subagent id.", undefined, t.session);
+					if (!taskId) return makeErrorResult("(missing id)", t.task, "Missing subprocess agent id.", undefined, t.session);
 					const result = await runDelegation(
 						pi,
 						ctx,
 						ctx.cwd,
 						agents,
 						taskId,
-						t.session,
+						t.session as SessionIntent,
 						addHandoffDocsToTask(t.task, t),
 						t.cwd,
 						undefined,
@@ -550,7 +580,15 @@ export default function (pi: ExtensionAPI) {
 			};
 		},
 
-		renderCall: renderSubagentCall,
-		renderResult: renderSubagentResult,
+		renderCall: renderSubprocessCall,
+		renderResult: renderSubprocessResult,
+	};
+
+	pi.registerTool(subprocessTool);
+	pi.registerTool({
+		...subprocessTool,
+		name: "subagent",
+		label: "Subagent (legacy)",
+		description: `Deprecated alias for subprocess. ${subprocessTool.description}`,
 	});
 }

@@ -1,7 +1,7 @@
 ---
 description: Scout gathers context, planner creates implementation plan (no implementation)
 ---
-Use the subagent tool with the chain parameter to execute this workflow:
+Use the subprocess tool with the chain parameter to execute this workflow:
 
 1. First, use id "scout" with session "new" to find all code relevant to: $@
 2. Then, use id "planner" with session "new" to create an implementation plan for "$@" using the context from the previous step (use {previous} placeholder)

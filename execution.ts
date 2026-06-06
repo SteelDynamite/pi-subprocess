@@ -8,7 +8,7 @@ import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import type { Message } from "@earendil-works/pi-ai";
 import type { AgentConfig } from "./agents.ts";
 import { getSubagentsFileName, isPathInside, resolveLocationalAgentId, scanLocationalAgents } from "./agents.ts";
-import { ADVERTISE_LOCATIONAL_AGENTS_ENV, DEFAULT_KNOWN_TOOLS, MAX_SUBAGENT_DEPTH, ORCHESTRATED_CHILD_ENV, SUBAGENT_CHILD_ENV } from "./constants.ts";
+import { ADVERTISE_LOCATIONAL_AGENTS_ENV, DEFAULT_KNOWN_TOOLS, LEGACY_ADVERTISE_LOCATIONAL_AGENTS_ENV, LEGACY_ADVERTISE_SOURCE_AGENTS_ENV, LEGACY_SUBAGENT_CHILD_ENV, LEGACY_SUBAGENT_DEPTH_ENV, MAX_SUBPROCESS_DEPTH, ORCHESTRATED_CHILD_ENV, SUBPROCESS_CHILD_ENV, SUBPROCESS_DEPTH_ENV } from "./constants.ts";
 import { getFinalOutput, makeErrorResult } from "./result.ts";
 import { formatWrongIntentReason, getRequiredSessionIntent, getWrongIntentRetry, persistSubagentState, subagentSettings, updateTrackedSession } from "./state.ts";
 import { getLocationalLoopError, makeChildLocationalEnv, notifyLocationalBoundaryDiscovered } from "./locational-guard.ts";
@@ -65,22 +65,30 @@ export function validateAgentTools(agent: AgentConfig): string | undefined {
 	return `${agent.filePath}: unknown tool(s): ${unknown.join(", ")}. Explicit tools must match available tool names exactly.`;
 }
 
-export function makeSubagentChildEnv(
+export function makeSubprocessChildEnv(
 	agent: AgentConfig,
 	currentDepth: number,
 	includeLocationalAgentsInBehavioralChild: boolean,
 ): Record<string, string> {
+	const advertiseLocationalAgents = agent.kind === "behavioral" ? (includeLocationalAgentsInBehavioralChild ? "1" : "0") : "1";
+	const depth = String(currentDepth + 1);
 	return {
-		PI_SUBAGENT_DEPTH: String(currentDepth + 1),
-		[SUBAGENT_CHILD_ENV]: "1",
+		[SUBPROCESS_DEPTH_ENV]: depth,
+		[LEGACY_SUBAGENT_DEPTH_ENV]: depth,
+		[SUBPROCESS_CHILD_ENV]: "1",
+		[LEGACY_SUBAGENT_CHILD_ENV]: "1",
 		[ORCHESTRATED_CHILD_ENV]: "1",
-		[ADVERTISE_LOCATIONAL_AGENTS_ENV]: agent.kind === "behavioral" ? (includeLocationalAgentsInBehavioralChild ? "1" : "0") : "1",
+		[ADVERTISE_LOCATIONAL_AGENTS_ENV]: advertiseLocationalAgents,
+		[LEGACY_ADVERTISE_LOCATIONAL_AGENTS_ENV]: advertiseLocationalAgents,
+		[LEGACY_ADVERTISE_SOURCE_AGENTS_ENV]: advertiseLocationalAgents,
 		...makeChildLocationalEnv(agent),
 	};
 }
 
+export const makeSubagentChildEnv = makeSubprocessChildEnv;
+
 async function writePromptToTempFile(agentName: string, prompt: string): Promise<{ dir: string; filePath: string }> {
-	const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-subagent-"));
+	const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-subprocess-"));
 	const safeName = agentName.replace(/[^\w.-]+/g, "_");
 	const filePath = path.join(tmpDir, `prompt-${safeName}.md`);
 	await withFileMutationQueue(filePath, async () => {
@@ -124,12 +132,12 @@ export async function runDelegation(
 
 	if (!agent) {
 		const available = agents.map((a) => `"${a.id}"`).join(", ") || "none";
-		return makeErrorResult(agentId, task, `Unknown subagent id: "${agentId}". Available subagents: ${available}.`, step, session);
+		return makeErrorResult(agentId, task, `Unknown subprocess agent id: "${agentId}". Available agents: ${available}.`, step, session);
 	}
 
-	const currentDepth = Number(process.env.PI_SUBAGENT_DEPTH ?? "0");
-	if (currentDepth >= MAX_SUBAGENT_DEPTH) {
-		return makeErrorResult(agent.id, task, `Subagent recursion limit reached (max depth ${MAX_SUBAGENT_DEPTH}).`, step, session);
+	const currentDepth = Number(process.env[SUBPROCESS_DEPTH_ENV] ?? process.env[LEGACY_SUBAGENT_DEPTH_ENV] ?? "0");
+	if (currentDepth >= MAX_SUBPROCESS_DEPTH) {
+		return makeErrorResult(agent.id, task, `Subprocess recursion limit reached (max depth ${MAX_SUBPROCESS_DEPTH}).`, step, session);
 	}
 
 	const locationalLoopError = getLocationalLoopError(agent);
@@ -175,7 +183,7 @@ export async function runDelegation(
 			return makeErrorResult(
 				agent.id,
 				task,
-				`Locational boundary enforced: use subagent id "${blocked}" instead of running behavioral agent "${agent.id}" with cwd inside it.`,
+				`Locational boundary enforced: use subprocess locational agent id "${blocked}" instead of running behavioral agent "${agent.id}" with cwd inside it.`,
 				step,
 				session,
 			);
@@ -241,7 +249,7 @@ export async function runDelegation(
 			const invocation = getPiInvocation(args);
 			const childEnv = {
 				...process.env,
-				...makeSubagentChildEnv(agent, currentDepth, includeLocationalAgentsInBehavioralChild),
+				...makeSubprocessChildEnv(agent, currentDepth, includeLocationalAgentsInBehavioralChild),
 			};
 			const proc = spawn(invocation.command, invocation.args, {
 				cwd: effectiveCwd,
@@ -322,7 +330,7 @@ export async function runDelegation(
 		});
 
 		currentResult.exitCode = exitCode;
-		if (wasAborted) throw new Error("Subagent was aborted");
+		if (wasAborted) throw new Error("Subprocess agent was aborted");
 		updateTrackedSession(ctx, agent, subagentSessionId, currentResult);
 		if (agent.resumable) persistSubagentState(pi);
 		return currentResult;

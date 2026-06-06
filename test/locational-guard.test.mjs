@@ -11,30 +11,32 @@ import {
 	makeChildLocationalEnv,
 	resolveFilesystemTarget,
 } from "../locational-guard.ts";
-import { CURRENT_LOCATIONAL_ROOT_ENV, LEGACY_CURRENT_LOCATIONAL_ROOT_ENV, LOCATIONAL_ANCESTOR_STACK_ENV } from "../constants.ts";
+import { CURRENT_LOCATIONAL_ROOT_ENV, LEGACY_CURRENT_LOCATIONAL_ROOT_ENV, LEGACY_SUBAGENT_CURRENT_LOCATIONAL_ROOT_ENV, LEGACY_SUBAGENT_LOCATIONAL_STACK_ENV, LOCATIONAL_ANCESTOR_STACK_ENV } from "../constants.ts";
 
 const originalEnv = {
 	[CURRENT_LOCATIONAL_ROOT_ENV]: process.env[CURRENT_LOCATIONAL_ROOT_ENV],
 	[LEGACY_CURRENT_LOCATIONAL_ROOT_ENV]: process.env[LEGACY_CURRENT_LOCATIONAL_ROOT_ENV],
+	[LEGACY_SUBAGENT_CURRENT_LOCATIONAL_ROOT_ENV]: process.env[LEGACY_SUBAGENT_CURRENT_LOCATIONAL_ROOT_ENV],
 	[LOCATIONAL_ANCESTOR_STACK_ENV]: process.env[LOCATIONAL_ANCESTOR_STACK_ENV],
+	[LEGACY_SUBAGENT_LOCATIONAL_STACK_ENV]: process.env[LEGACY_SUBAGENT_LOCATIONAL_STACK_ENV],
 };
 
 function resetEnv() {
-	for (const key of [CURRENT_LOCATIONAL_ROOT_ENV, LEGACY_CURRENT_LOCATIONAL_ROOT_ENV, LOCATIONAL_ANCESTOR_STACK_ENV]) {
+	for (const key of [CURRENT_LOCATIONAL_ROOT_ENV, LEGACY_CURRENT_LOCATIONAL_ROOT_ENV, LEGACY_SUBAGENT_CURRENT_LOCATIONAL_ROOT_ENV, LOCATIONAL_ANCESTOR_STACK_ENV, LEGACY_SUBAGENT_LOCATIONAL_STACK_ENV]) {
 		if (originalEnv[key] === undefined) delete process.env[key];
 		else process.env[key] = originalEnv[key];
 	}
 }
 
 function clearEnv() {
-	for (const key of [CURRENT_LOCATIONAL_ROOT_ENV, LEGACY_CURRENT_LOCATIONAL_ROOT_ENV, LOCATIONAL_ANCESTOR_STACK_ENV]) delete process.env[key];
+	for (const key of [CURRENT_LOCATIONAL_ROOT_ENV, LEGACY_CURRENT_LOCATIONAL_ROOT_ENV, LEGACY_SUBAGENT_CURRENT_LOCATIONAL_ROOT_ENV, LOCATIONAL_ANCESTOR_STACK_ENV, LEGACY_SUBAGENT_LOCATIONAL_STACK_ENV]) delete process.env[key];
 }
 
 beforeEach(clearEnv);
 afterEach(resetEnv);
 
 function tempDir() {
-	return mkdtempSync(join(tmpdir(), "pi-subagent-test-"));
+	return mkdtempSync(join(tmpdir(), "pi-subprocess-test-"));
 }
 
 test("resolveFilesystemTarget ignores URLs and resolves relative, bare, and home-like filesystem paths", () => {

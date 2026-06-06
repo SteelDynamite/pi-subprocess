@@ -20,14 +20,16 @@ function escapeXml(text: string): string {
 	return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-export function formatSubagentManifest(agents: AgentConfig[]): string {
+export function formatSubprocessAgentManifest(agents: AgentConfig[]): string {
 	const visible = agents.filter((agent) => agent.manifest);
 	if (visible.length === 0) return "";
 	const entries = visible
 		.map(
 			(agent) =>
-				`  <subagent>\n    <id>${escapeXml(agent.id)}</id>\n    <description>${escapeXml(agent.description)}</description>\n  </subagent>`,
+				`  <agent>\n    <id>${escapeXml(agent.id)}</id>\n    <description>${escapeXml(agent.description)}</description>\n  </agent>`,
 		)
 		.join("\n");
-	return `<available-subagents>\n${entries}\n</available-subagents>`;
+	return `<available-subprocess-agents>\n${entries}\n</available-subprocess-agents>`;
 }
+
+export const formatSubagentManifest = formatSubprocessAgentManifest;

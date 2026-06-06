@@ -4,7 +4,7 @@ import * as path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "./agents.ts";
 import { getSubagentsFileName, scanLocationalAgents } from "./agents.ts";
-import { CURRENT_LOCATIONAL_ROOT_ENV, LEGACY_CURRENT_LOCATIONAL_ROOT_ENV, LOCATIONAL_ANCESTOR_STACK_ENV } from "./constants.ts";
+import { CURRENT_LOCATIONAL_ROOT_ENV, LEGACY_CURRENT_LOCATIONAL_ROOT_ENV, LEGACY_SUBAGENT_CURRENT_LOCATIONAL_ROOT_ENV, LEGACY_SUBAGENT_LOCATIONAL_STACK_ENV, LOCATIONAL_ANCESTOR_STACK_ENV } from "./constants.ts";
 
 const notifiedLocationalBoundaryKeys = new Set<string>();
 
@@ -13,7 +13,7 @@ export function notifyLocationalBoundaryDiscovered(ctx: ExtensionContext, root: 
 	const key = `${path.resolve(ctx.cwd)}\0${path.resolve(root)}`;
 	if (notifiedLocationalBoundaryKeys.has(key)) return;
 	notifiedLocationalBoundaryKeys.add(key);
-	ctx.ui.notify(`Locational boundary discovered: delegate to subagent id "${root}"`, "info");
+	ctx.ui.notify(`Locational boundary discovered: delegate to subprocess locational agent id "${root}"`, "info");
 }
 
 export function canonicalPath(value: string): string {
@@ -31,7 +31,7 @@ function getEnvLocationalRoot(name: string): string | undefined {
 }
 
 export function getLocationalAncestorStack(): string[] {
-	const raw = process.env[LOCATIONAL_ANCESTOR_STACK_ENV]?.trim();
+	const raw = (process.env[LOCATIONAL_ANCESTOR_STACK_ENV] ?? process.env[LEGACY_SUBAGENT_LOCATIONAL_STACK_ENV])?.trim();
 	const roots: string[] = [];
 	if (raw) {
 		try {
@@ -41,7 +41,7 @@ export function getLocationalAncestorStack(): string[] {
 			roots.push(...raw.split(path.delimiter).filter(Boolean));
 		}
 	}
-	const current = getEnvLocationalRoot(CURRENT_LOCATIONAL_ROOT_ENV) ?? getEnvLocationalRoot(LEGACY_CURRENT_LOCATIONAL_ROOT_ENV);
+	const current = getEnvLocationalRoot(CURRENT_LOCATIONAL_ROOT_ENV) ?? getEnvLocationalRoot(LEGACY_SUBAGENT_CURRENT_LOCATIONAL_ROOT_ENV) ?? getEnvLocationalRoot(LEGACY_CURRENT_LOCATIONAL_ROOT_ENV);
 	if (current) roots.push(current);
 	return Array.from(new Set(roots.map(canonicalPath)));
 }
@@ -70,7 +70,7 @@ function findContainingLocationalRoot(cwd: string): string | undefined {
 }
 
 export function getGuardedLocationalRoots(cwd: string): string[] {
-	const activeLocationalRoot = getEnvLocationalRoot(CURRENT_LOCATIONAL_ROOT_ENV) ?? getEnvLocationalRoot(LEGACY_CURRENT_LOCATIONAL_ROOT_ENV);
+	const activeLocationalRoot = getEnvLocationalRoot(CURRENT_LOCATIONAL_ROOT_ENV) ?? getEnvLocationalRoot(LEGACY_SUBAGENT_CURRENT_LOCATIONAL_ROOT_ENV) ?? getEnvLocationalRoot(LEGACY_CURRENT_LOCATIONAL_ROOT_ENV);
 	const roots = scanLocationalAgents(cwd).agents.map((agent) => canonicalPath(agent.rootDir));
 	const containingRoot = findContainingLocationalRoot(cwd);
 	if (containingRoot) roots.push(containingRoot);
@@ -83,7 +83,9 @@ export function makeChildLocationalEnv(agent: AgentConfig): Record<string, strin
 	const stack = Array.from(new Set([...getLocationalAncestorStack(), targetRoot]));
 	return {
 		[CURRENT_LOCATIONAL_ROOT_ENV]: targetRoot,
+		[LEGACY_SUBAGENT_CURRENT_LOCATIONAL_ROOT_ENV]: targetRoot,
 		[LOCATIONAL_ANCESTOR_STACK_ENV]: JSON.stringify(stack),
+		[LEGACY_SUBAGENT_LOCATIONAL_STACK_ENV]: JSON.stringify(stack),
 		[LEGACY_CURRENT_LOCATIONAL_ROOT_ENV]: targetRoot,
 	};
 }
