@@ -1,11 +1,11 @@
 import * as os from "node:os";
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
-import { COLLAPSED_ITEM_COUNT } from "./constants.ts";
+import { COLLAPSED_ITEM_COUNT, MAX_NESTED_RENDER_DEPTH, MAX_NESTED_RENDER_LINES } from "./constants.ts";
 import { getAgentId } from "./params.ts";
 import { formatUsageStats, getDisplayItems, getFinalOutput, getNestedSubagentIds, isFailedResult } from "./result.ts";
 import type { AgentScope } from "./agents.ts";
-import type { DisplayItem, SessionIntent, SingleResult, SubagentDetails } from "./types.ts";
+import type { DisplayItem, NestedSubprocessCall, SessionIntent, SingleResult, SubagentDetails } from "./types.ts";
 
 function formatToolCall(
 	toolName: string,
@@ -133,6 +133,65 @@ export function renderSubprocessCall(args: any, theme: any, _context: any) {
 			return new Text(text, 0, 0);
 		}
 
+function previewLine(text: string, max = 120): string {
+	const singleLine = text.replace(/\s+/g, " ").trim();
+	return singleLine.length > max ? `${singleLine.slice(0, max)}...` : singleLine;
+}
+
+function formatNestedResultLine(result: SingleResult, themeFg: (color: any, text: string) => string): string {
+	const icon = result.exitCode === -1 ? themeFg("warning", "⏳") : isFailedResult(result) ? themeFg("error", "✗") : themeFg("success", "✓");
+	let line = `${icon} ${themeFg("accent", result.agent)}`;
+	if (result.step !== undefined) line += themeFg("muted", ` [step:${result.step}]`);
+	if (result.kind === "command") line += themeFg("muted", " [command]");
+	if (result.exitCode === -1) return `${line} ${themeFg("muted", "running")}`;
+	if (result.stopReason && result.stopReason !== "end") line += ` ${themeFg("error", `[${result.stopReason}]`)}`;
+	const output = result.kind === "command" ? result.stdout || result.stderr || result.errorMessage || "" : getFinalOutput(result.messages) || result.errorMessage || result.stderr || "";
+	const preview = previewLine(output);
+	return preview ? `${line} ${themeFg("dim", preview)}` : line;
+}
+
+export function formatNestedSubprocessesForDisplay(
+	nestedSubprocesses: NestedSubprocessCall[] | undefined,
+	themeFg: (color: any, text: string) => string = (_color, text) => text,
+	depth = 0,
+): string {
+	if (!nestedSubprocesses || nestedSubprocesses.length === 0) return "";
+	const lines: string[] = [];
+	const append = (line: string) => {
+		if (lines.length < MAX_NESTED_RENDER_LINES) lines.push(line);
+	};
+	const formatCalls = (calls: NestedSubprocessCall[], currentDepth: number) => {
+		const indent = "  ".repeat(currentDepth);
+		if (currentDepth >= MAX_NESTED_RENDER_DEPTH) {
+			append(`${indent}${themeFg("muted", "↳ ... nested subprocess depth cap")}`);
+			return;
+		}
+		for (const call of calls) {
+			if (lines.length >= MAX_NESTED_RENDER_LINES) break;
+			const statusIcon = call.status === "running" ? themeFg("warning", "⏳") : call.status === "failed" ? themeFg("error", "✗") : themeFg("success", "✓");
+			const shortId = call.toolCallId.length > 10 ? `${call.toolCallId.slice(0, 10)}…` : call.toolCallId;
+			let header = `${indent}${themeFg("muted", "↳")} ${statusIcon} ${themeFg("toolTitle", call.toolName)} ${themeFg("muted", `[${shortId}] ${call.status}`)}`;
+			if (call.truncated) header += themeFg("warning", " [truncated]");
+			append(header);
+			if (call.error) append(`${indent}  ${themeFg("error", `Error: ${previewLine(call.error)}`)}`);
+			const details = call.details;
+			if (!details) {
+				if (call.status === "running") append(`${indent}  ${themeFg("muted", "(waiting for nested details...)")}`);
+				continue;
+			}
+			append(`${indent}  ${themeFg("muted", `${details.mode}: ${details.results.length} result${details.results.length === 1 ? "" : "s"}`)}`);
+			for (const result of details.results.slice(0, 6)) {
+				append(`${indent}  ${formatNestedResultLine(result, themeFg)}`);
+				if (result.nestedSubprocesses?.length) formatCalls(result.nestedSubprocesses, currentDepth + 1);
+			}
+			if (details.results.length > 6) append(`${indent}  ${themeFg("muted", `... +${details.results.length - 6} more nested results`)}`);
+		}
+	};
+	formatCalls(nestedSubprocesses, depth);
+	if (lines.length >= MAX_NESTED_RENDER_LINES) lines.push(themeFg("muted", "... nested subprocess render cap"));
+	return lines.join("\n");
+}
+
 export function renderSubprocessResult(result: any, { expanded }: { expanded: boolean }, theme: any, _context: any) {
 			const details = result.details as SubagentDetails | undefined;
 			const formatResultSession = (r: SingleResult) => r.sessionIntent ? theme.fg("muted", ` [session:${r.sessionIntent}]`) : "";
@@ -186,6 +245,8 @@ export function renderSubprocessResult(result: any, { expanded }: { expanded: bo
 					const nestedIds = getNestedSubagentIds(r.messages);
 					if (nestedIds.length > 0)
 						container.addChild(new Text(theme.fg("dim", `Nested: ${nestedIds.map((id) => `${r.agent} > ${id}`).join(", ")}`), 0, 0));
+					const nestedText = formatNestedSubprocessesForDisplay(r.nestedSubprocesses, theme.fg.bind(theme));
+					if (nestedText) container.addChild(new Text(nestedText, 0, 0));
 					if (r.warning) container.addChild(new Text(theme.fg("warning", `Warning: ${r.warning}`), 0, 0));
 					const wrongSessionText = renderWrongSessionIntent(r);
 					if (wrongSessionText) container.addChild(new Text(theme.fg("error", wrongSessionText), 0, 0));
@@ -225,6 +286,8 @@ export function renderSubprocessResult(result: any, { expanded }: { expanded: bo
 				const nestedIds = getNestedSubagentIds(r.messages);
 				let text = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentOrigin})`)}${formatResultSession(r)}`;
 				if (nestedIds.length > 0) text += theme.fg("dim", ` +${nestedIds.length} nested`);
+				const nestedText = formatNestedSubprocessesForDisplay(r.nestedSubprocesses, theme.fg.bind(theme));
+				if (nestedText) text += `\n${nestedText}`;
 				if (isError && r.stopReason) text += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
 				if (r.warning) text += `\n${theme.fg("warning", `Warning: ${r.warning}`)}`;
 				const wrongSessionText = renderWrongSessionIntent(r);
@@ -286,6 +349,8 @@ export function renderSubprocessResult(result: any, { expanded }: { expanded: bo
 						container.addChild(new Text(theme.fg("muted", "Task: ") + theme.fg("dim", r.task), 0, 0));
 						const wrongSessionText = renderWrongSessionIntent(r);
 						if (wrongSessionText) container.addChild(new Text(theme.fg("error", wrongSessionText), 0, 0));
+						const nestedText = formatNestedSubprocessesForDisplay(r.nestedSubprocesses, theme.fg.bind(theme));
+						if (nestedText) container.addChild(new Text(nestedText, 0, 0));
 
 						// Show tool calls
 						for (const item of displayItems) {
@@ -329,6 +394,8 @@ export function renderSubprocessResult(result: any, { expanded }: { expanded: bo
 					const displayItems = getDisplayItems(r.messages);
 					text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)}${formatResultSession(r)} ${rIcon}`;
 					const wrongSessionText = renderWrongSessionIntent(r);
+					const nestedText = formatNestedSubprocessesForDisplay(r.nestedSubprocesses, theme.fg.bind(theme));
+					if (nestedText) text += `\n${nestedText}`;
 					if (wrongSessionText) text += `\n${theme.fg("error", wrongSessionText)}`;
 					else if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
 					else text += `\n${renderDisplayItems(displayItems, 5)}`;
@@ -375,6 +442,8 @@ export function renderSubprocessResult(result: any, { expanded }: { expanded: bo
 						container.addChild(new Text(theme.fg("muted", "Task: ") + theme.fg("dim", r.task), 0, 0));
 						const wrongSessionText = renderWrongSessionIntent(r);
 						if (wrongSessionText) container.addChild(new Text(theme.fg("error", wrongSessionText), 0, 0));
+						const nestedText = formatNestedSubprocessesForDisplay(r.nestedSubprocesses, theme.fg.bind(theme));
+						if (nestedText) container.addChild(new Text(nestedText, 0, 0));
 
 						// Show tool calls
 						for (const item of displayItems) {
@@ -419,6 +488,8 @@ export function renderSubprocessResult(result: any, { expanded }: { expanded: bo
 					const displayItems = getDisplayItems(r.messages);
 					text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)}${formatResultSession(r)} ${rIcon}`;
 					const wrongSessionText = renderWrongSessionIntent(r);
+					const nestedText = formatNestedSubprocessesForDisplay(r.nestedSubprocesses, theme.fg.bind(theme));
+					if (nestedText) text += `\n${nestedText}`;
 					if (wrongSessionText) text += `\n${theme.fg("error", wrongSessionText)}`;
 					else if (displayItems.length === 0)
 						text += `\n${theme.fg("muted", r.exitCode === -1 ? "(running...)" : "(no output)")}`;

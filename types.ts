@@ -76,6 +76,16 @@ export interface SingleResult {
 	timeoutMs?: number;
 	timedOut?: boolean;
 	nextSessionIntent?: SessionIntent;
+	nestedSubprocesses?: NestedSubprocessCall[];
+}
+
+export interface NestedSubprocessCall {
+	toolCallId: string;
+	toolName: "subprocess" | "subagent";
+	status: "running" | "completed" | "failed";
+	details?: SubprocessDetails;
+	error?: string;
+	truncated?: boolean;
 }
 
 export interface SubprocessDetails {

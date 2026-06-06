@@ -10,6 +10,7 @@ import type { AgentConfig } from "./agents.ts";
 import { getSubagentsFileName, isPathInside, resolveLocationalAgentId, scanLocationalAgents } from "./agents.ts";
 import { ADVERTISE_LOCATIONAL_AGENTS_ENV, DEFAULT_KNOWN_TOOLS, LEGACY_ADVERTISE_LOCATIONAL_AGENTS_ENV, LEGACY_ADVERTISE_SOURCE_AGENTS_ENV, LEGACY_SUBAGENT_CHILD_ENV, LEGACY_SUBAGENT_DEPTH_ENV, MAX_SUBPROCESS_DEPTH, ORCHESTRATED_CHILD_ENV, SUBPROCESS_CHILD_ENV, SUBPROCESS_DEPTH_ENV } from "./constants.ts";
 import { createSubprocessLifecycle, getSubprocessLifecycleSnapshot, markSubprocessActivity, markSubprocessClosed, markSubprocessTerminating, recordSubprocessError } from "./lifecycle.ts";
+import { applyNestedSubprocessEvent } from "./nested.ts";
 import { getFinalOutput, makeErrorResult } from "./result.ts";
 import { formatWrongIntentReason, getRequiredSessionIntent, getWrongIntentRetry, persistSubagentState, subagentSettings, updateTrackedSession } from "./state.ts";
 import { getLocationalLoopError, makeChildLocationalEnv, notifyLocationalBoundaryDiscovered } from "./locational-guard.ts";
@@ -87,6 +88,37 @@ export function makeSubprocessChildEnv(
 }
 
 export const makeSubagentChildEnv = makeSubprocessChildEnv;
+
+export function processChildJsonEvent(event: any, currentResult: SingleResult, emitUpdate: () => void): void {
+	if (applyNestedSubprocessEvent(currentResult, event)) emitUpdate();
+
+	if (event.type === "message_end" && event.message) {
+		const msg = event.message as Message;
+		currentResult.messages.push(msg);
+
+		if (msg.role === "assistant") {
+			currentResult.usage.turns++;
+			const usage = msg.usage;
+			if (usage) {
+				currentResult.usage.input += usage.input || 0;
+				currentResult.usage.output += usage.output || 0;
+				currentResult.usage.cacheRead += usage.cacheRead || 0;
+				currentResult.usage.cacheWrite += usage.cacheWrite || 0;
+				currentResult.usage.cost += usage.cost?.total || 0;
+				currentResult.usage.contextTokens = usage.totalTokens || 0;
+			}
+			if (!currentResult.model && msg.model) currentResult.model = msg.model;
+			if (msg.stopReason) currentResult.stopReason = msg.stopReason;
+			if (msg.errorMessage) currentResult.errorMessage = msg.errorMessage;
+		}
+		emitUpdate();
+	}
+
+	if (event.type === "tool_result_end" && event.message) {
+		currentResult.messages.push(event.message as Message);
+		emitUpdate();
+	}
+}
 
 async function writePromptToTempFile(agentName: string, prompt: string): Promise<{ dir: string; filePath: string }> {
 	const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-subprocess-"));
@@ -277,33 +309,7 @@ export async function runDelegation(
 				} catch {
 					return;
 				}
-
-				if (event.type === "message_end" && event.message) {
-					const msg = event.message as Message;
-					currentResult.messages.push(msg);
-
-					if (msg.role === "assistant") {
-						currentResult.usage.turns++;
-						const usage = msg.usage;
-						if (usage) {
-							currentResult.usage.input += usage.input || 0;
-							currentResult.usage.output += usage.output || 0;
-							currentResult.usage.cacheRead += usage.cacheRead || 0;
-							currentResult.usage.cacheWrite += usage.cacheWrite || 0;
-							currentResult.usage.cost += usage.cost?.total || 0;
-							currentResult.usage.contextTokens = usage.totalTokens || 0;
-						}
-						if (!currentResult.model && msg.model) currentResult.model = msg.model;
-						if (msg.stopReason) currentResult.stopReason = msg.stopReason;
-						if (msg.errorMessage) currentResult.errorMessage = msg.errorMessage;
-					}
-					emitUpdate();
-				}
-
-				if (event.type === "tool_result_end" && event.message) {
-					currentResult.messages.push(event.message as Message);
-					emitUpdate();
-				}
+				processChildJsonEvent(event, currentResult, emitUpdate);
 			};
 
 			proc.stdout.on("data", (data) => {
