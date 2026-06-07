@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { DEFAULT_COMMAND_TIMEOUT_MS, PER_TASK_OUTPUT_CAP } from "./constants.ts";
 import { createSubprocessLifecycle, getSubprocessLifecycleSnapshot, markSubprocessActivity, markSubprocessClosed, markSubprocessTerminating, recordSubprocessError } from "./lifecycle.ts";
 import { formatCommandResultOutput } from "./result.ts";
+import { appendCappedText } from "./stream-buffer.ts";
 import type { OnCommandUpdateCallback, SingleResult } from "./types.ts";
 
 export interface CommandTaskInput {
@@ -36,16 +37,6 @@ function killCommandProcess(proc: ChildProcess, signal: NodeJS.Signals) {
 	} catch {
 		// Already exited.
 	}
-}
-
-function appendCapped(current: string, chunk: string, maxBytes: number): { text: string; truncated: boolean; bytes: number } {
-	const next = current + chunk;
-	const bytes = Buffer.byteLength(next, "utf8");
-	if (bytes <= maxBytes) return { text: next, truncated: false, bytes };
-
-	let truncated = next.slice(0, maxBytes);
-	while (Buffer.byteLength(truncated, "utf8") > maxBytes) truncated = truncated.slice(0, -1);
-	return { text: truncated, truncated: true, bytes };
 }
 
 function makeCommandMessage(result: SingleResult): any {
@@ -129,7 +120,7 @@ export async function runCommandTask(
 		};
 
 		proc.stdout.on("data", (data) => {
-			const next = appendCapped(result.stdout ?? "", data.toString(), maxOutputBytes);
+			const next = appendCappedText(result.stdout ?? "", data.toString(), maxOutputBytes);
 			result.stdout = next.text;
 			result.stdoutTruncated = Boolean(result.stdoutTruncated || next.truncated);
 			result.stdoutBytes = next.bytes;
@@ -138,7 +129,7 @@ export async function runCommandTask(
 		});
 
 		proc.stderr.on("data", (data) => {
-			const next = appendCapped(result.stderr, data.toString(), maxOutputBytes);
+			const next = appendCappedText(result.stderr, data.toString(), maxOutputBytes);
 			result.stderr = next.text;
 			result.stderrTruncated = Boolean(result.stderrTruncated || next.truncated);
 			result.stderrBytes = next.bytes;
@@ -170,7 +161,7 @@ export async function runCommandTask(
 	if (lifecycle.exitCode === undefined) markSubprocessClosed(lifecycle, exitCode);
 	updateFromLifecycle();
 	if (result.timedOut && !result.stderr.includes("Command timed out")) {
-		const next = appendCapped(result.stderr, `${result.stderr ? "\n" : ""}Command timed out after ${timeoutMs}ms.`, maxOutputBytes);
+		const next = appendCappedText(result.stderr, `${result.stderr ? "\n" : ""}Command timed out after ${timeoutMs}ms.`, maxOutputBytes);
 		result.stderr = next.text;
 		result.stderrTruncated = Boolean(result.stderrTruncated || next.truncated);
 		result.stderrBytes = next.bytes;
