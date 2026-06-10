@@ -203,6 +203,8 @@ export default function (pi: ExtensionAPI) {
 			'Default behavioral agent scope is "user" (from ~/.pi/agent/agents).',
 			'To enable project-local behavioral agents in .pi/agents, set agentScope: "both" (or "project").',
 		].join(" "),
+		promptSnippet:
+			"Run foreground-managed subprocess work: specialized Pi agents with isolated context, or shell commands; streams progress, waits for completion, and returns consolidated results.",
 		parameters: SubprocessParams,
 
 		async execute(_toolCallId: string, params: SubprocessToolParams, signal: AbortSignal | undefined, onUpdate: OnUpdateCallback | undefined, ctx: ExtensionContext) {
