@@ -3,9 +3,9 @@ import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { COLLAPSED_ITEM_COUNT, MAX_NESTED_RENDER_DEPTH, MAX_NESTED_RENDER_LINES } from "./constants.ts";
 import { getAgentId } from "./params.ts";
-import { formatUsageStats, getDisplayItems, getFinalOutput, getNestedSubagentIds, isFailedResult } from "./result.ts";
+import { formatUsageStats, getDisplayItems, getFinalOutput, getNestedSubprocessIds, isFailedResult } from "./result.ts";
 import type { AgentScope } from "./agents.ts";
-import type { DisplayItem, NestedSubprocessCall, SessionIntent, SingleResult, SubagentDetails } from "./types.ts";
+import type { DisplayItem, NestedSubprocessCall, SessionIntent, SingleResult, SubprocessDetails } from "./types.ts";
 
 function formatToolCall(
 	toolName: string,
@@ -193,7 +193,7 @@ export function formatNestedSubprocessesForDisplay(
 }
 
 export function renderSubprocessResult(result: any, { expanded }: { expanded: boolean }, theme: any, _context: any) {
-			const details = result.details as SubagentDetails | undefined;
+			const details = result.details as SubprocessDetails | undefined;
 			const formatResultSession = (r: SingleResult) => r.sessionIntent ? theme.fg("muted", ` [session:${r.sessionIntent}]`) : "";
 			if (!details || details.results.length === 0) {
 				const text = result.content[0];
@@ -242,7 +242,7 @@ export function renderSubprocessResult(result: any, { expanded }: { expanded: bo
 					let header = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentOrigin})`)}${formatResultSession(r)}`;
 					if (isError && r.stopReason) header += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
 					container.addChild(new Text(header, 0, 0));
-					const nestedIds = getNestedSubagentIds(r.messages);
+					const nestedIds = getNestedSubprocessIds(r.messages);
 					if (nestedIds.length > 0)
 						container.addChild(new Text(theme.fg("dim", `Nested: ${nestedIds.map((id) => `${r.agent} > ${id}`).join(", ")}`), 0, 0));
 					const nestedText = formatNestedSubprocessesForDisplay(r.nestedSubprocesses, theme.fg.bind(theme));
@@ -283,7 +283,7 @@ export function renderSubprocessResult(result: any, { expanded }: { expanded: bo
 					return container;
 				}
 
-				const nestedIds = getNestedSubagentIds(r.messages);
+				const nestedIds = getNestedSubprocessIds(r.messages);
 				let text = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentOrigin})`)}${formatResultSession(r)}`;
 				if (nestedIds.length > 0) text += theme.fg("dim", ` +${nestedIds.length} nested`);
 				const nestedText = formatNestedSubprocessesForDisplay(r.nestedSubprocesses, theme.fg.bind(theme));
@@ -507,5 +507,3 @@ export function renderSubprocessResult(result: any, { expanded }: { expanded: bo
 			return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
 		}
 
-export const renderSubagentCall = renderSubprocessCall;
-export const renderSubagentResult = renderSubprocessResult;

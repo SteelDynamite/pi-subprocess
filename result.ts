@@ -112,9 +112,9 @@ export function getDisplayItems(messages: Message[]): DisplayItem[] {
 	return items;
 }
 
-export function getNestedSubagentIds(messages: Message[]): string[] {
+export function getNestedSubprocessIds(messages: Message[]): string[] {
 	return getDisplayItems(messages)
-		.filter((item): item is Extract<DisplayItem, { type: "toolCall" }> => item.type === "toolCall" && (item.name === "subprocess" || item.name === "subagent"))
+		.filter((item): item is Extract<DisplayItem, { type: "toolCall" }> => item.type === "toolCall" && item.name === "subprocess")
 		.flatMap((item) => {
 			const args = item.args as any;
 			if (args.chain && Array.isArray(args.chain)) return args.chain.map((step: any) => getAgentId(step)).filter(Boolean);
@@ -133,6 +133,7 @@ export function makeErrorResult(
 	extra: Partial<Pick<SingleResult, "agentOrigin" | "errorMessage" | "wrongSessionIntent">> = {},
 ): SingleResult {
 	return {
+		kind: "agent",
 		agent: agentId,
 		agentOrigin: extra.agentOrigin ?? "unknown",
 		sessionIntent,

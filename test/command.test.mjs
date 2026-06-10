@@ -5,12 +5,13 @@ import { DEFAULT_COMMAND_TIMEOUT_MS } from "../constants.ts";
 import { formatCommandResultOutput, getResultOutput, isFailedResult } from "../result.ts";
 
 const cwd = process.cwd();
+const node = JSON.stringify(process.execPath);
 
 test("runCommandTask waits and captures stdout/stderr/metadata", async () => {
 	const updates = [];
 	const result = await runCommandTask(
 		cwd,
-		{ command: "printf hello && printf err >&2", name: "sample" },
+		{ command: `${node} -e "process.stdout.write('hello'); process.stderr.write('err')"`, name: "sample" },
 		undefined,
 		undefined,
 		(update) => updates.push(update),
@@ -32,7 +33,7 @@ test("runCommandTask waits and captures stdout/stderr/metadata", async () => {
 test("runCommandTask times out bounded commands", async () => {
 	const result = await runCommandTask(
 		cwd,
-		{ command: 'node -e "setTimeout(() => {}, 1000)"', timeoutMs: 50 },
+		{ command: `${node} -e "setTimeout(() => {}, 1000)"`, timeoutMs: 50 },
 		undefined,
 		undefined,
 		undefined,
@@ -48,7 +49,7 @@ test("runCommandTask times out bounded commands", async () => {
 test("runCommandTask reports nonzero exit and output truncation", async () => {
 	const result = await runCommandTask(
 		cwd,
-		{ command: "printf 1234567890 && exit 7", maxOutputBytes: 5 },
+		{ command: `${node} -e "process.stdout.write('1234567890'); process.exit(7)"`, maxOutputBytes: 5 },
 		undefined,
 		undefined,
 		undefined,

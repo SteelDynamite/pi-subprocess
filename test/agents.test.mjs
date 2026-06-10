@@ -49,8 +49,8 @@ test("scanLocationalAgents finds nested locational roots, skips node_modules, an
 		writeFileSync(join(skipped, "SUBAGENTS.md"), "---\ndescription: Skipped\n---\nBody\n");
 
 		const scan = scanLocationalAgents(root, { maxDepth: 4, timeoutMs: 1000 });
-		assert.deepEqual(scan.agents.map((a) => a.rootDir), [realpathSync(owned)]);
-		assert.equal(resolveLocationalAgentId(root, "owned").rootDir, realpathSync(owned));
+		assert.deepEqual(scan.agents.map((a) => realpathSync.native(a.rootDir)), [realpathSync.native(owned)]);
+		assert.equal(realpathSync.native(resolveLocationalAgentId(root, "owned").rootDir), realpathSync.native(owned));
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -66,7 +66,7 @@ test("discoverAgents can omit locational agents without changing behavioral-agen
 		const withLocational = discoverAgents(root, "project", { includeLocationalAgents: true });
 		const withoutLocational = discoverAgents(root, "project", { includeLocationalAgents: false });
 
-		assert.ok(withLocational.locationalAgents.some((a) => a.rootDir === realpathSync(owned)));
+		assert.ok(withLocational.locationalAgents.some((a) => realpathSync.native(a.rootDir) === realpathSync.native(owned)));
 		assert.equal(withoutLocational.locationalAgents.length, 0);
 		assert.equal(withoutLocational.agents.some((a) => a.origin === "locational"), false);
 	} finally {

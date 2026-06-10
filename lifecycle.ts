@@ -1,4 +1,4 @@
-export type SubprocessLifecycleKind = "subagent" | "command";
+export type SubprocessLifecycleKind = "agent" | "command";
 export type SubprocessLifecyclePhase = "starting" | "running" | "terminating" | "closed";
 export type SubprocessStopReason = "aborted" | "timeout" | "error";
 

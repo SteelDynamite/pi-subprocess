@@ -1,7 +1,7 @@
 import { MAX_NESTED_SUBPROCESSES_PER_RESULT, NESTED_SUBPROCESS_DETAIL_CAP } from "./constants.ts";
 import type { NestedSubprocessCall, SingleResult, SubprocessDetails, UsageStats } from "./types.ts";
 
-const NESTED_TOOL_NAMES = new Set(["subprocess", "subagent"]);
+const NESTED_TOOL_NAMES = new Set(["subprocess"]);
 
 function isNestedToolName(name: unknown): name is NestedSubprocessCall["toolName"] {
 	return typeof name === "string" && NESTED_TOOL_NAMES.has(name);

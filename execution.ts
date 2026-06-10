@@ -7,14 +7,14 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import type { Message } from "@earendil-works/pi-ai";
 import type { AgentConfig } from "./agents.ts";
-import { getSubagentsFileName, isPathInside, resolveLocationalAgentId, scanLocationalAgents } from "./agents.ts";
-import { ADVERTISE_LOCATIONAL_AGENTS_ENV, DEFAULT_KNOWN_TOOLS, LEGACY_ADVERTISE_LOCATIONAL_AGENTS_ENV, LEGACY_ADVERTISE_SOURCE_AGENTS_ENV, LEGACY_SUBAGENT_CHILD_ENV, LEGACY_SUBAGENT_DEPTH_ENV, MAX_SUBPROCESS_DEPTH, ORCHESTRATED_CHILD_ENV, SUBPROCESS_CHILD_ENV, SUBPROCESS_DEPTH_ENV } from "./constants.ts";
+import { getAgentInstructionsFileName, isPathInside, resolveLocationalAgentId, scanLocationalAgents } from "./agents.ts";
+import { ADVERTISE_LOCATIONAL_AGENTS_ENV, DEFAULT_KNOWN_TOOLS, MAX_SUBPROCESS_DEPTH, ORCHESTRATED_CHILD_ENV, SUBPROCESS_CHILD_ENV, SUBPROCESS_DEPTH_ENV } from "./constants.ts";
 import { createSubprocessLifecycle, getSubprocessLifecycleSnapshot, markSubprocessActivity, markSubprocessClosed, markSubprocessTerminating, recordSubprocessError } from "./lifecycle.ts";
 import { applyNestedSubprocessEvent } from "./nested.ts";
 import { getFinalOutput, makeErrorResult } from "./result.ts";
-import { formatWrongIntentReason, getRequiredSessionIntent, getWrongIntentRetry, persistSubagentState, subagentSettings, updateTrackedSession } from "./state.ts";
+import { formatWrongIntentReason, getRequiredSessionIntent, getWrongIntentRetry, persistSubprocessState, subprocessSettings, updateTrackedSession } from "./state.ts";
 import { getLocationalLoopError, makeChildLocationalEnv, notifyLocationalBoundaryDiscovered } from "./locational-guard.ts";
-import type { OnUpdateCallback, SessionIntent, SingleResult, SubagentDetails } from "./types.ts";
+import type { OnUpdateCallback, SessionIntent, SingleResult, SubprocessDetails } from "./types.ts";
 
 let knownToolNames = new Set(DEFAULT_KNOWN_TOOLS);
 
@@ -76,18 +76,12 @@ export function makeSubprocessChildEnv(
 	const depth = String(currentDepth + 1);
 	return {
 		[SUBPROCESS_DEPTH_ENV]: depth,
-		[LEGACY_SUBAGENT_DEPTH_ENV]: depth,
 		[SUBPROCESS_CHILD_ENV]: "1",
-		[LEGACY_SUBAGENT_CHILD_ENV]: "1",
 		[ORCHESTRATED_CHILD_ENV]: "1",
 		[ADVERTISE_LOCATIONAL_AGENTS_ENV]: advertiseLocationalAgents,
-		[LEGACY_ADVERTISE_LOCATIONAL_AGENTS_ENV]: advertiseLocationalAgents,
-		[LEGACY_ADVERTISE_SOURCE_AGENTS_ENV]: advertiseLocationalAgents,
 		...makeChildLocationalEnv(agent),
 	};
 }
-
-export const makeSubagentChildEnv = makeSubprocessChildEnv;
 
 export function processChildJsonEvent(event: any, currentResult: SingleResult, emitUpdate: () => void): void {
 	if (applyNestedSubprocessEvent(currentResult, event)) emitUpdate();
@@ -158,7 +152,7 @@ export async function runDelegation(
 	step: number | undefined,
 	signal: AbortSignal | undefined,
 	onUpdate: OnUpdateCallback | undefined,
-	makeDetails: (results: SingleResult[]) => SubagentDetails,
+	makeDetails: (results: SingleResult[]) => SubprocessDetails,
 	includeLocationalAgentsInBehavioralChild: boolean,
 ): Promise<SingleResult> {
 	const agent = resolveAgent(defaultCwd, agents, agentId);
@@ -168,7 +162,7 @@ export async function runDelegation(
 		return makeErrorResult(agentId, task, `Unknown subprocess agent id: "${agentId}". Available agents: ${available}.`, step, session);
 	}
 
-	const currentDepth = Number(process.env[SUBPROCESS_DEPTH_ENV] ?? process.env[LEGACY_SUBAGENT_DEPTH_ENV] ?? "0");
+	const currentDepth = Number(process.env[SUBPROCESS_DEPTH_ENV] ?? "0");
 	if (currentDepth >= MAX_SUBPROCESS_DEPTH) {
 		return makeErrorResult(agent.id, task, `Subprocess recursion limit reached (max depth ${MAX_SUBPROCESS_DEPTH}).`, step, session);
 	}
@@ -224,13 +218,13 @@ export async function runDelegation(
 	}
 
 	const resolvedModel = resolveAgentModel(agent, ctx);
-	const subagentSessionId = agent.resumable && subagentSettings.reuseEnabled
+	const subprocessSessionId = agent.resumable && subprocessSettings.reuseEnabled
 		? session === "resume"
 			? requiredSession.record?.sessionId
 			: crypto.randomUUID()
 		: undefined;
 	const args: string[] = ["--mode", "json", "-p"];
-	if (subagentSessionId) args.push("--session-id", subagentSessionId);
+	if (subprocessSessionId) args.push("--session-id", subprocessSessionId);
 	else args.push("--no-session");
 	if (resolvedModel.model) args.push("--model", resolvedModel.model);
 	if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
@@ -238,8 +232,9 @@ export async function runDelegation(
 	let tmpPromptDir: string | null = null;
 	let tmpPromptPath: string | null = null;
 
-	const lifecycle = createSubprocessLifecycle("subagent", agent.id);
+	const lifecycle = createSubprocessLifecycle("agent", agent.id);
 	const currentResult: SingleResult = {
+		kind: "agent",
 		agent: agent.id,
 		agentOrigin: agent.origin,
 		sessionIntent: session,
@@ -274,7 +269,7 @@ export async function runDelegation(
 		if (agent.systemPrompt.trim()) {
 			const prompt =
 				agent.kind === "locational"
-					? `# ${getSubagentsFileName()}\n\nThe following ${getSubagentsFileName()} is more specific than any AGENTS.md loaded from the same folder. Follow it for this source root.\n\n${agent.systemPrompt}`
+					? `# ${getAgentInstructionsFileName()}\n\nThe following ${getAgentInstructionsFileName()} is more specific than any AGENTS.md loaded from the same folder. Follow it for this source root.\n\n${agent.systemPrompt}`
 					: agent.systemPrompt;
 			const tmp = await writePromptToTempFile(agent.id, prompt);
 			tmpPromptDir = tmp.dir;
@@ -356,8 +351,8 @@ export async function runDelegation(
 		if (lifecycle.exitCode === undefined) markSubprocessClosed(lifecycle, exitCode);
 		updateLifecycleResultFields();
 		if (wasAborted) throw new Error("Subprocess agent was aborted");
-		updateTrackedSession(ctx, agent, subagentSessionId, currentResult);
-		if (agent.resumable) persistSubagentState(pi);
+		updateTrackedSession(ctx, agent, subprocessSessionId, currentResult);
+		if (agent.resumable) persistSubprocessState(pi);
 		return currentResult;
 	} finally {
 		if (tmpPromptPath)

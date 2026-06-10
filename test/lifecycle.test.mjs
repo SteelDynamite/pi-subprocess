@@ -34,7 +34,7 @@ test("subprocess lifecycle tracks phase, activity, and final snapshot", () => {
 });
 
 test("subprocess lifecycle records errors before close", () => {
-	const state = createSubprocessLifecycle("subagent", "agent", { now: 1 });
+	const state = createSubprocessLifecycle("agent", "agent", { now: 1 });
 	recordSubprocessError(state, "boom", 2);
 	markSubprocessClosed(state, 1, 3);
 	const snapshot = getSubprocessLifecycleSnapshot(state, 4);

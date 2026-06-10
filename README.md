@@ -11,7 +11,7 @@ Run specialized Pi agents with isolated contexts, or run shell commands, while t
 - **Streaming progress**: single, parallel, chain, and command modes stream status.
 - **Consolidated results**: parent receives final output, exit status, cwd, stderr/stdout, usage, and truncation metadata.
 - **Abort support**: Ctrl+C propagates to child processes.
-- **Compatibility**: the legacy `subagent` tool and package-era API aliases remain supported.
+- **Legacy readers**: old state/env records are still read where needed for safe migration cleanup.
 
 ## Structure
 
@@ -52,13 +52,9 @@ for f in prompts/*.md; do
 done
 ```
 
-Legacy installs under `~/.pi/agent/extensions/subagent` can continue while migrating.
-
 ## Tool
 
-Primary tool: `subprocess`.
-
-Compatibility alias: `subagent`.
+Tool name: `subprocess`.
 
 ### Modes
 
@@ -103,7 +99,7 @@ Use the locational path as `id` to delegate instead. Locational agents run from 
 
 Supported frontmatter: `description`, `tools`, `model`, `manifest`, `resumable`.
 
-Locational discovery defaults: max depth `6`, timeout `500ms`. New env vars: `PI_SUBPROCESS_LOCATIONAL_SCAN_MAX_DEPTH`, `PI_SUBPROCESS_LOCATIONAL_SCAN_TIMEOUT_MS`. Legacy `PI_SUBAGENT_*` vars still work where applicable.
+Locational discovery defaults: max depth `6`, timeout `500ms`. Use `PI_SUBPROCESS_LOCATIONAL_SCAN_MAX_DEPTH` and `PI_SUBPROCESS_LOCATIONAL_SCAN_TIMEOUT_MS` to override them.
 
 ## Child Environment
 
@@ -112,20 +108,9 @@ Delegated child processes receive:
 - `PI_SUBPROCESS_CHILD=1`
 - `PI_ORCHESTRATED_CHILD=1`
 
-Legacy compatibility also sets `PI_SUBAGENT_CHILD=1`.
-
 ## Settings
 
 Use `/subprocess-settings` to toggle resumable-session reuse, set the context threshold, view active sessions, or reset tracked sessions.
-
-## Compatibility
-
-Preserved aliases:
-
-- tool: `subagent` → `subprocess`
-- parameter: `agent` → `id`
-- parameter: `includeSourceAgents` → `includeLocationalAgents`
-- state/env compatibility for existing `subagent-state` and `PI_SUBAGENT_*` markers
 
 ## Non-goals
 

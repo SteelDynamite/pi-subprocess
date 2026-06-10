@@ -13,7 +13,6 @@ const HandoffDocFields = {
 
 const TaskItem = Type.Object({
 	id: Type.Optional(Type.String({ description: "Subprocess agent id to invoke" })),
-	agent: Type.Optional(Type.String({ description: "Deprecated alias for id" })),
 	session: SessionIntentSchema,
 	task: Type.String({ description: "Task to delegate to the agent" }),
 	cwd: Type.Optional(Type.String({ description: "Optional legacy cwd override for behavioral agents; omit normally" })),
@@ -22,7 +21,6 @@ const TaskItem = Type.Object({
 
 const ChainItem = Type.Object({
 	id: Type.Optional(Type.String({ description: "Subprocess agent id to invoke" })),
-	agent: Type.Optional(Type.String({ description: "Deprecated alias for id" })),
 	session: SessionIntentSchema,
 	task: Type.String({ description: "Task with optional {previous} placeholder for prior output" }),
 	cwd: Type.Optional(Type.String({ description: "Optional legacy cwd override for behavioral agents; omit normally" })),
@@ -44,7 +42,6 @@ const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
 
 export const SubprocessParams = Type.Object({
 	id: Type.Optional(Type.String({ description: "Subprocess agent id to invoke (for single mode)" })),
-	agent: Type.Optional(Type.String({ description: "Deprecated alias for id (single mode)" })),
 	session: Type.Optional(SessionIntentSchema),
 	task: Type.Optional(Type.String({ description: "Task to delegate (for single mode)" })),
 	...HandoffDocFields,
@@ -58,10 +55,5 @@ export const SubprocessParams = Type.Object({
 	includeLocationalAgents: Type.Optional(
 		Type.Boolean({ description: "Allow behavioral-agent child sessions to advertise locational agents. Default: false.", default: false }),
 	),
-	includeSourceAgents: Type.Optional(
-		Type.Boolean({ description: "Deprecated alias for includeLocationalAgents.", default: false }),
-	),
 	cwd: Type.Optional(Type.String({ description: "Optional legacy cwd override for behavioral agents (single mode); omit normally" })),
 });
-
-export const SubagentParams = SubprocessParams;

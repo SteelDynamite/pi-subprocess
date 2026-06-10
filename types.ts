@@ -21,8 +21,6 @@ export interface SubprocessSettings {
 	contextThreshold: number;
 }
 
-export type SubagentSettings = SubprocessSettings;
-
 export interface TrackedSession {
 	mainSessionKey: string;
 	agentId: string;
@@ -39,8 +37,6 @@ export interface PersistedSubprocessState {
 	sessions: TrackedSession[];
 }
 
-export type PersistedSubagentState = PersistedSubprocessState;
-
 export interface WrongSessionIntentError {
 	agentId: string;
 	requested: SessionIntent;
@@ -49,7 +45,7 @@ export interface WrongSessionIntentError {
 }
 
 export interface SingleResult {
-	kind?: "subagent" | "command";
+	kind?: "agent" | "command";
 	agent: string;
 	agentOrigin: AgentOrigin | "unknown";
 	sessionIntent?: SessionIntent;
@@ -81,7 +77,7 @@ export interface SingleResult {
 
 export interface NestedSubprocessCall {
 	toolCallId: string;
-	toolName: "subprocess" | "subagent";
+	toolName: "subprocess";
 	status: "running" | "completed" | "failed";
 	details?: SubprocessDetails;
 	error?: string;
@@ -97,9 +93,7 @@ export interface SubprocessDetails {
 	results: SingleResult[];
 }
 
-export type SubagentDetails = SubprocessDetails;
-
 export type DisplayItem = { type: "text"; text: string } | { type: "toolCall"; name: string; args: Record<string, any> };
 
-export type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
+export type OnUpdateCallback = (partial: AgentToolResult<SubprocessDetails>) => void;
 export type OnCommandUpdateCallback = (result: SingleResult) => void;

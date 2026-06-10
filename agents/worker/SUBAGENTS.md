@@ -1,5 +1,5 @@
 ---
-description: General-purpose subagent with full capabilities, isolated context
+description: General-purpose subprocess agent with full capabilities, isolated context
 model: openai-codex/gpt-5.5
 ---
 

@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { addHandoffDocsToTask, getAgentId, getHandoffDocs, getMissingSessionError } from "../params.ts";
 
-test("getAgentId prefers id over legacy agent", () => {
-	assert.equal(getAgentId({ id: "new", agent: "old" }), "new");
-	assert.equal(getAgentId({ agent: "old" }), "old");
+test("getAgentId returns only the id field", () => {
+	assert.equal(getAgentId({ id: "new" }), "new");
+	assert.equal(getAgentId({}), undefined);
 });
 
 test("getMissingSessionError reports missing session by mode", () => {

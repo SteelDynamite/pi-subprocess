@@ -4,7 +4,7 @@ import {
 	formatUsageStats,
 	getDisplayItems,
 	getFinalOutput,
-	getNestedSubagentIds,
+	getNestedSubprocessIds,
 	getResultOutput,
 	isFailedResult,
 	truncateParallelOutput,
@@ -61,22 +61,20 @@ test("truncateParallelOutput caps large utf8 output", () => {
 	assert.ok(Buffer.byteLength(truncated, "utf8") < Buffer.byteLength(output, "utf8"));
 });
 
-test("getDisplayItems and getNestedSubagentIds extract assistant text and tool calls", () => {
+test("getDisplayItems and getNestedSubprocessIds extract assistant text and tool calls", () => {
 	const messages = [
 		assistant([
 			{ type: "text", text: "thinking" },
-			{ type: "toolCall", name: "subprocess", arguments: { tasks: [{ id: "a" }, { agent: "b" }] } },
-			{ type: "toolCall", name: "subagent", arguments: { id: "legacy" } },
+			{ type: "toolCall", name: "subprocess", arguments: { tasks: [{ id: "a" }, { id: "b" }] } },
 			{ type: "toolCall", name: "read", arguments: { path: "x" } },
 		]),
 	];
 	assert.deepEqual(getDisplayItems(messages), [
 		{ type: "text", text: "thinking" },
-		{ type: "toolCall", name: "subprocess", args: { tasks: [{ id: "a" }, { agent: "b" }] } },
-		{ type: "toolCall", name: "subagent", args: { id: "legacy" } },
+		{ type: "toolCall", name: "subprocess", args: { tasks: [{ id: "a" }, { id: "b" }] } },
 		{ type: "toolCall", name: "read", args: { path: "x" } },
 	]);
-	assert.deepEqual(getNestedSubagentIds(messages), ["a", "b", "legacy"]);
+	assert.deepEqual(getNestedSubprocessIds(messages), ["a", "b"]);
 });
 
 test("formatUsageStats formats nonzero stats compactly", () => {

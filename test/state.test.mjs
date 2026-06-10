@@ -3,9 +3,9 @@ import { afterEach, test } from "node:test";
 import {
 	formatWrongIntentReason,
 	getRequiredSessionIntent,
-	restoreSubagentState,
+	restoreSubprocessState,
 	setContextThreshold,
-	subagentSettings,
+	subprocessSettings,
 	trackedSessions,
 	updateTrackedSession,
 } from "../state.ts";
@@ -51,7 +51,7 @@ function result(overrides = {}) {
 
 function resetState() {
 	trackedSessions.clear();
-	subagentSettings.reuseEnabled = true;
+	subprocessSettings.reuseEnabled = true;
 	setContextThreshold(0.6);
 }
 
@@ -60,9 +60,9 @@ afterEach(resetState);
 test("getRequiredSessionIntent returns new for non-resumable, disabled reuse, or no record", () => {
 	resetState();
 	assert.deepEqual(getRequiredSessionIntent(ctx(), agent({ resumable: false })), { intent: "new", reason: "non-resumable" });
-	subagentSettings.reuseEnabled = false;
+	subprocessSettings.reuseEnabled = false;
 	assert.deepEqual(getRequiredSessionIntent(ctx(), agent()), { intent: "new", reason: "reuse-disabled" });
-	subagentSettings.reuseEnabled = true;
+	subprocessSettings.reuseEnabled = true;
 	assert.deepEqual(getRequiredSessionIntent(ctx(), agent()), { intent: "new", reason: "none" });
 });
 
@@ -92,10 +92,9 @@ test("updateTrackedSession marks failed or missing-session resumable calls as ne
 	assert.equal(missingSession.nextSessionIntent, "new");
 });
 
-test("restoreSubagentState uses latest subprocess or legacy custom state entry", () => {
+test("restoreSubprocessState uses latest subprocess custom state entry", () => {
 	resetState();
 	const branch = [
-		{ type: "custom", customType: "subagent-state", data: { settings: { reuseEnabled: false, contextThreshold: 0.5 }, sessions: [] } },
 		{
 			type: "custom",
 			customType: "subprocess-state",
@@ -105,8 +104,8 @@ test("restoreSubagentState uses latest subprocess or legacy custom state entry",
 			},
 		},
 	];
-	restoreSubagentState(ctx("session-2", branch));
-	assert.equal(subagentSettings.contextThreshold, 0.8);
+	restoreSubprocessState(ctx("session-2", branch));
+	assert.equal(subprocessSettings.contextThreshold, 0.8);
 	assert.equal(getRequiredSessionIntent(ctx("session-2"), agent()).intent, "resume");
 });
 

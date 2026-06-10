@@ -84,25 +84,10 @@ test("interleaved nested subprocess updates stay separated", () => {
 	assert.equal(owner.nestedSubprocesses.find((call) => call.toolCallId === "b").details.results[0].agent, "beta");
 });
 
-test("legacy subagent events are tracked and unrelated tool events are ignored", () => {
+test("unrelated tool events are ignored", () => {
 	const owner = result();
 	assert.equal(applyNestedSubprocessEvent(owner, { type: "tool_execution_start", toolCallId: "read-1", toolName: "read", args: {} }), false);
 	assert.equal(owner.nestedSubprocesses, undefined);
-
-	assert.equal(applyNestedSubprocessEvent(owner, { type: "tool_execution_start", toolCallId: "legacy-1", toolName: "subagent", args: {} }), true);
-	assert.equal(owner.nestedSubprocesses[0].toolName, "subagent");
-	assert.equal(
-		applyNestedSubprocessEvent(owner, {
-			type: "tool_execution_end",
-			toolCallId: "legacy-1",
-			toolName: "subagent",
-			result: { content: [{ type: "text", text: "legacy failed" }] },
-			isError: true,
-		}),
-		true,
-	);
-	assert.equal(owner.nestedSubprocesses[0].status, "failed");
-	assert.equal(owner.nestedSubprocesses[0].error, "legacy failed");
 });
 
 test("large nested details are conservatively capped", () => {
@@ -124,8 +109,8 @@ test("large nested details are conservatively capped", () => {
 test("nested subprocess formatter renders recursive indented details", () => {
 	const nested = [
 		{
-			toolCallId: "legacy-call-12345",
-			toolName: "subagent",
+			toolCallId: "nested-call-12345",
+			toolName: "subprocess",
 			status: "completed",
 			details: details([
 				result({
@@ -145,7 +130,7 @@ test("nested subprocess formatter renders recursive indented details", () => {
 	];
 
 	const text = formatNestedSubprocessesForDisplay(nested);
-	assert.match(text, /subagent/);
+	assert.match(text, /subprocess/);
 	assert.match(text, /outer-nested/);
 	assert.match(text, /inner/);
 	assert.match(text, /↳/);

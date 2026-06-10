@@ -129,7 +129,7 @@ function resolveAtIncludes(body: string, baseDir: string): string {
 		.join("\n");
 }
 
-function readSubagentContent(filePath: string, readBody: boolean): string {
+function readAgentInstructionsContent(filePath: string, readBody: boolean): string {
 	if (readBody) return fs.readFileSync(filePath, "utf-8");
 
 	const fd = fs.openSync(filePath, "r");
@@ -158,7 +158,7 @@ function readSubagentContent(filePath: string, readBody: boolean): string {
 	}
 }
 
-function loadSubagentFile(
+function loadAgentInstructionsFile(
 	filePath: string,
 	id: string,
 	origin: AgentOrigin,
@@ -167,7 +167,7 @@ function loadSubagentFile(
 ): { agent?: AgentConfig; error?: string } {
 	let content: string;
 	try {
-		content = readSubagentContent(filePath, options.readBody);
+		content = readAgentInstructionsContent(filePath, options.readBody);
 	} catch (error) {
 		return { error: `${filePath}: failed to read (${String(error)})` };
 	}
@@ -220,7 +220,7 @@ function loadBehavioralAgentsFromDir(dir: string, origin: "bundled" | "user" | "
 		const filePath = path.join(rootDir, SUBAGENTS_FILE);
 		if (!fs.existsSync(filePath)) continue;
 
-		const loaded = loadSubagentFile(filePath, entry.name, origin, "behavioral", { readBody: true, rootDir });
+		const loaded = loadAgentInstructionsFile(filePath, entry.name, origin, "behavioral", { readBody: true, rootDir });
 		if (loaded.error) errors.push(loaded.error);
 		if (loaded.agent) agents.push(loaded.agent);
 	}
@@ -244,7 +244,7 @@ export function loadLocationalAgent(rootDir: string, options: { readBody: boolea
 	const absRoot = path.resolve(rootDir);
 	const filePath = path.join(absRoot, SUBAGENTS_FILE);
 	if (!fs.existsSync(filePath)) return { error: `${absRoot}: missing ${SUBAGENTS_FILE}` };
-	return loadSubagentFile(filePath, absRoot, "locational", "locational", { readBody: options.readBody, rootDir: absRoot });
+	return loadAgentInstructionsFile(filePath, absRoot, "locational", "locational", { readBody: options.readBody, rootDir: absRoot });
 }
 
 export function resolveLocationalAgentId(cwd: string, id: string): AgentConfig | null {
@@ -262,8 +262,8 @@ export function scanLocationalAgents(
 	const roots: AgentConfig[] = [];
 	const errors: string[] = [];
 	const start = path.resolve(cwd);
-	const maxDepth = options.maxDepth ?? readPositiveIntegerEnv("PI_SUBPROCESS_LOCATIONAL_SCAN_MAX_DEPTH", readPositiveIntegerEnv("PI_SUBAGENT_LOCATIONAL_SCAN_MAX_DEPTH", DEFAULT_LOCATIONAL_SCAN_MAX_DEPTH));
-	const timeoutMs = options.timeoutMs ?? readPositiveIntegerEnv("PI_SUBPROCESS_LOCATIONAL_SCAN_TIMEOUT_MS", readPositiveIntegerEnv("PI_SUBAGENT_LOCATIONAL_SCAN_TIMEOUT_MS", DEFAULT_LOCATIONAL_SCAN_TIMEOUT_MS));
+	const maxDepth = options.maxDepth ?? readPositiveIntegerEnv("PI_SUBPROCESS_LOCATIONAL_SCAN_MAX_DEPTH", DEFAULT_LOCATIONAL_SCAN_MAX_DEPTH);
+	const timeoutMs = options.timeoutMs ?? readPositiveIntegerEnv("PI_SUBPROCESS_LOCATIONAL_SCAN_TIMEOUT_MS", DEFAULT_LOCATIONAL_SCAN_TIMEOUT_MS);
 	const startedAt = Date.now();
 	let timedOut = false;
 
@@ -291,8 +291,8 @@ export function scanLocationalAgents(
 			const child = path.join(dir, entry.name);
 			if (isSymlink(child)) continue;
 
-			const subagentsPath = path.join(child, SUBAGENTS_FILE);
-			if (fs.existsSync(subagentsPath)) {
+			const instructionsPath = path.join(child, SUBAGENTS_FILE);
+			if (fs.existsSync(instructionsPath)) {
 				const loaded = loadLocationalAgent(child, { readBody: false });
 				if (loaded.error) errors.push(loaded.error);
 				if (loaded.agent) roots.push(loaded.agent);
@@ -310,8 +310,8 @@ export function scanLocationalAgents(
 	return { agents: roots, errors };
 }
 
-export function discoverAgents(cwd: string, scope: AgentScope, options: { includeLocationalAgents?: boolean; includeSourceAgents?: boolean } = {}): AgentDiscoveryResult {
-	const includeLocationalAgents = options.includeLocationalAgents ?? options.includeSourceAgents ?? true;
+export function discoverAgents(cwd: string, scope: AgentScope, options: { includeLocationalAgents?: boolean } = {}): AgentDiscoveryResult {
+	const includeLocationalAgents = options.includeLocationalAgents ?? true;
 	const packageDir = path.dirname(fileURLToPath(import.meta.url));
 	const bundledDir = path.join(packageDir, "agents");
 	const userDir = path.join(getAgentDir(), "agents");
@@ -362,6 +362,6 @@ export function isPathInside(candidate: string, root: string): boolean {
 	return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
-export function getSubagentsFileName(): string {
+export function getAgentInstructionsFileName(): string {
 	return SUBAGENTS_FILE;
 }

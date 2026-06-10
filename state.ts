@@ -1,11 +1,11 @@
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "./agents.ts";
-import { DEFAULT_CONTEXT_THRESHOLD, LEGACY_SUBAGENT_STATE_ENTRY, SUBPROCESS_STATE_ENTRY } from "./constants.ts";
+import { DEFAULT_CONTEXT_THRESHOLD, SUBPROCESS_STATE_ENTRY } from "./constants.ts";
 import { isFailedResult } from "./result.ts";
-import type { NextIntentReason, PersistedSubagentState, SessionIntent, SingleResult, SubagentSettings, TrackedSession } from "./types.ts";
+import type { NextIntentReason, PersistedSubprocessState, SessionIntent, SingleResult, SubprocessSettings, TrackedSession } from "./types.ts";
 
-export let subagentSettings: SubagentSettings = { reuseEnabled: true, contextThreshold: DEFAULT_CONTEXT_THRESHOLD };
+export let subprocessSettings: SubprocessSettings = { reuseEnabled: true, contextThreshold: DEFAULT_CONTEXT_THRESHOLD };
 export const trackedSessions = new Map<string, TrackedSession>();
 
 export function getMainSessionKey(ctx: ExtensionContext): string {
@@ -19,14 +19,14 @@ function getSessionRecordKey(ctx: ExtensionContext, agentId: string): string {
 
 export function restoreSubprocessState(ctx: ExtensionContext) {
 	const branchEntries = ctx.sessionManager.getBranch();
-	let latest: PersistedSubagentState | undefined;
+	let latest: PersistedSubprocessState | undefined;
 	for (const entry of branchEntries) {
-		if (entry.type === "custom" && (entry.customType === SUBPROCESS_STATE_ENTRY || entry.customType === LEGACY_SUBAGENT_STATE_ENTRY)) {
-			latest = entry.data as PersistedSubagentState | undefined;
+		if (entry.type === "custom" && entry.customType === SUBPROCESS_STATE_ENTRY) {
+			latest = entry.data as PersistedSubprocessState | undefined;
 		}
 	}
 	if (!latest) return;
-	subagentSettings = {
+	subprocessSettings = {
 		reuseEnabled: latest.settings?.reuseEnabled ?? true,
 		contextThreshold: latest.settings?.contextThreshold ?? DEFAULT_CONTEXT_THRESHOLD,
 	};
@@ -36,28 +36,24 @@ export function restoreSubprocessState(ctx: ExtensionContext) {
 	}
 }
 
-export const restoreSubagentState = restoreSubprocessState;
-
 export function persistSubprocessState(pi: ExtensionAPI) {
-	pi.appendEntry<PersistedSubagentState>(SUBPROCESS_STATE_ENTRY, {
-		settings: subagentSettings,
+	pi.appendEntry<PersistedSubprocessState>(SUBPROCESS_STATE_ENTRY, {
+		settings: subprocessSettings,
 		sessions: Array.from(trackedSessions.values()),
 	});
 }
 
-export const persistSubagentState = persistSubprocessState;
-
 export function toggleReuse() {
-	subagentSettings.reuseEnabled = !subagentSettings.reuseEnabled;
+	subprocessSettings.reuseEnabled = !subprocessSettings.reuseEnabled;
 }
 
 export function setContextThreshold(value: number) {
-	subagentSettings.contextThreshold = value;
+	subprocessSettings.contextThreshold = value;
 }
 
 export function getRequiredSessionIntent(ctx: ExtensionContext, agent: AgentConfig): { intent: SessionIntent; reason: NextIntentReason; record?: TrackedSession } {
 	if (!agent.resumable) return { intent: "new", reason: "non-resumable" };
-	if (!subagentSettings.reuseEnabled) return { intent: "new", reason: "reuse-disabled" };
+	if (!subprocessSettings.reuseEnabled) return { intent: "new", reason: "reuse-disabled" };
 	const record = trackedSessions.get(getSessionRecordKey(ctx, agent.id));
 	if (!record) return { intent: "new", reason: "none" };
 	return { intent: record.nextIntent, reason: record.reason, record };
@@ -80,13 +76,13 @@ export function formatWrongIntentReason(agent: AgentConfig, requested: SessionIn
 
 export function updateTrackedSession(ctx: ExtensionContext, agent: AgentConfig, sessionId: string | undefined, result: SingleResult) {
 	if (!agent.resumable) return;
-	if (!subagentSettings.reuseEnabled || !sessionId || isFailedResult(result)) {
+	if (!subprocessSettings.reuseEnabled || !sessionId || isFailedResult(result)) {
 		result.nextSessionIntent = "new";
 		return;
 	}
 	const contextTokens = result.usage.contextTokens;
 	const contextWindow = result.contextWindow;
-	const overThreshold = Boolean(contextWindow && contextTokens > 0 && contextTokens / contextWindow >= subagentSettings.contextThreshold);
+	const overThreshold = Boolean(contextWindow && contextTokens > 0 && contextTokens / contextWindow >= subprocessSettings.contextThreshold);
 	const record: TrackedSession = {
 		mainSessionKey: getMainSessionKey(ctx),
 		agentId: agent.id,

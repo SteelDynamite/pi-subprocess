@@ -1,7 +1,7 @@
 import type { SessionIntent } from "./types.ts";
 
-export function getAgentId(input: { id?: string; agent?: string }): string | undefined {
-	return input.id ?? input.agent;
+export function getAgentId(input: { id?: string }): string | undefined {
+	return input.id;
 }
 
 export function getHandoffDocs(input: { contextDocs?: string[]; handoffDocs?: string[] }): string[] {
