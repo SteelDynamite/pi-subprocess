@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { runCommandTask } from "../command.ts";
-import { DEFAULT_COMMAND_TIMEOUT_MS } from "../constants.ts";
+import { makeCommandChildEnv, runCommandTask } from "../command.ts";
+import { DEFAULT_COMMAND_TIMEOUT_MS, ORCHESTRATED_CHILD_ENV, SUBPROCESS_CHILD_ENV } from "../constants.ts";
 import { formatCommandResultOutput, getResultOutput, isFailedResult } from "../result.ts";
 
 const cwd = process.cwd();
@@ -28,6 +28,36 @@ test("runCommandTask waits and captures stdout/stderr/metadata", async () => {
 	assert.ok(updates.length >= 2);
 	assert.match(getResultOutput(result), /Exit: 0/);
 	assert.match(getResultOutput(result), /## stdout\n\nhello/);
+});
+
+test("runCommandTask marks command children as orchestrated subprocess children", async () => {
+	const originalSubprocessChild = process.env[SUBPROCESS_CHILD_ENV];
+	const originalOrchestratedChild = process.env[ORCHESTRATED_CHILD_ENV];
+	try {
+		process.env[SUBPROCESS_CHILD_ENV] = "0";
+		process.env[ORCHESTRATED_CHILD_ENV] = "0";
+		const result = await runCommandTask(
+			cwd,
+			{
+				command: `${node} -e ${JSON.stringify(`process.stdout.write(process.env.${SUBPROCESS_CHILD_ENV} + ':' + process.env.${ORCHESTRATED_CHILD_ENV})`)}`,
+				name: "env-markers",
+			},
+			undefined,
+			undefined,
+			undefined,
+		);
+
+		assert.equal(result.exitCode, 0);
+		assert.equal(result.stdout, "1:1");
+		const childEnv = makeCommandChildEnv({ [SUBPROCESS_CHILD_ENV]: "0", [ORCHESTRATED_CHILD_ENV]: "0" });
+		assert.equal(childEnv[SUBPROCESS_CHILD_ENV], "1");
+		assert.equal(childEnv[ORCHESTRATED_CHILD_ENV], "1");
+	} finally {
+		if (originalSubprocessChild === undefined) delete process.env[SUBPROCESS_CHILD_ENV];
+		else process.env[SUBPROCESS_CHILD_ENV] = originalSubprocessChild;
+		if (originalOrchestratedChild === undefined) delete process.env[ORCHESTRATED_CHILD_ENV];
+		else process.env[ORCHESTRATED_CHILD_ENV] = originalOrchestratedChild;
+	}
 });
 
 test("runCommandTask times out bounded commands", async () => {

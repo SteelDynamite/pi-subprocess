@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import * as path from "node:path";
-import { DEFAULT_COMMAND_TIMEOUT_MS, PER_TASK_OUTPUT_CAP } from "./constants.ts";
+import { DEFAULT_COMMAND_TIMEOUT_MS, ORCHESTRATED_CHILD_ENV, PER_TASK_OUTPUT_CAP, SUBPROCESS_CHILD_ENV } from "./constants.ts";
 import { createSubprocessLifecycle, getSubprocessLifecycleSnapshot, markSubprocessActivity, markSubprocessClosed, markSubprocessTerminating, recordSubprocessError } from "./lifecycle.ts";
 import { formatCommandResultOutput } from "./result.ts";
 import { appendCappedText } from "./stream-buffer.ts";
@@ -43,6 +43,14 @@ function makeCommandMessage(result: SingleResult): any {
 	return {
 		role: "assistant",
 		content: [{ type: "text", text: formatCommandResultOutput(result) }],
+	};
+}
+
+export function makeCommandChildEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+	return {
+		...baseEnv,
+		[SUBPROCESS_CHILD_ENV]: "1",
+		[ORCHESTRATED_CHILD_ENV]: "1",
 	};
 }
 
@@ -103,7 +111,7 @@ export async function runCommandTask(
 	const exitCode = await new Promise<number>((resolve) => {
 		const proc = spawn(input.command, {
 			cwd,
-			env: process.env,
+			env: makeCommandChildEnv(),
 			shell: true,
 			detached: process.platform !== "win32",
 			stdio: ["ignore", "pipe", "pipe"],

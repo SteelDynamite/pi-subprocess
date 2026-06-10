@@ -103,7 +103,7 @@ Locational discovery defaults: max depth `6`, timeout `500ms`. Use `PI_SUBPROCES
 
 ## Child Environment
 
-Delegated child processes receive:
+Agent and command subprocess child processes receive:
 
 - `PI_SUBPROCESS_CHILD=1`
 - `PI_ORCHESTRATED_CHILD=1`

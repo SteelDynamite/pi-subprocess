@@ -2,6 +2,7 @@
   "name": "pi-subprocess",
   "version": "0.0.0",
   "type": "module",
+  "license": "MIT",
   "keywords": [
     "pi-package"
   ],
@@ -25,7 +26,12 @@
     "test": "node --test test/*.test.mjs"
   },
   "devDependencies": {
+    "@earendil-works/pi-agent-core": "0.78.0",
+    "@earendil-works/pi-ai": "0.78.0",
+    "@earendil-works/pi-coding-agent": "0.78.0",
+    "@earendil-works/pi-tui": "0.78.0",
     "@types/node": "^25.9.1",
+    "typebox": "1.1.39",
     "typescript": "^6.0.3"
   }
 }
