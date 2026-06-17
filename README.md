@@ -22,15 +22,11 @@ pi-subprocess/
 ├── agents.ts
 ├── command.ts
 ├── locational-guard.ts
-├── agents/
-│   ├── scout/SUBAGENTS.md
-│   ├── planner/SUBAGENTS.md
-│   ├── reviewer/SUBAGENTS.md
-│   └── worker/SUBAGENTS.md
-└── prompts/
-    ├── implement.md
-    ├── scout-and-plan.md
-    └── implement-and-review.md
+└── agents/
+    ├── scout/SUBAGENTS.md
+    ├── planner/SUBAGENTS.md
+    ├── reviewer/SUBAGENTS.md
+    └── worker/SUBAGENTS.md
 ```
 
 ## Installation
@@ -44,11 +40,6 @@ ln -sf "$(pwd)/index.ts" ~/.pi/agent/extensions/subprocess/index.ts
 mkdir -p ~/.pi/agent/agents
 for d in agents/*; do
   ln -sfn "$(pwd)/$d" ~/.pi/agent/agents/$(basename "$d")
-done
-
-mkdir -p ~/.pi/agent/prompts
-for f in prompts/*.md; do
-  ln -sf "$(pwd)/$f" ~/.pi/agent/prompts/$(basename "$f")
 done
 ```
 
