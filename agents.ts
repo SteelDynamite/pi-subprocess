@@ -5,7 +5,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, parseFrontmatter } from "./pi-compat.ts";
 
 export type AgentScope = "user" | "project" | "both";
 export type AgentOrigin = "bundled" | "user" | "project" | "locational";

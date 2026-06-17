@@ -1,6 +1,6 @@
 import * as os from "node:os";
-import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import { getMarkdownTheme } from "./pi-compat.ts";
 import { COLLAPSED_ITEM_COUNT, MAX_NESTED_RENDER_DEPTH, MAX_NESTED_RENDER_LINES } from "./constants.ts";
 import { getAgentId } from "./params.ts";
 import { formatUsageStats, getDisplayItems, getFinalOutput, getNestedSubprocessIds, isFailedResult } from "./result.ts";

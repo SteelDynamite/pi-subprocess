@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "./pi-compat.ts";
 import type { AgentConfig } from "./agents.ts";
 import { DEFAULT_CONTEXT_THRESHOLD, SUBPROCESS_STATE_ENTRY } from "./constants.ts";
 import { isFailedResult } from "./result.ts";

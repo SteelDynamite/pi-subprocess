@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "./pi-compat.ts";
 import type { AgentConfig } from "./agents.ts";
 import { getAgentInstructionsFileName, scanLocationalAgents } from "./agents.ts";
 import { CURRENT_LOCATIONAL_ROOT_ENV, LOCATIONAL_ANCESTOR_STACK_ENV } from "./constants.ts";

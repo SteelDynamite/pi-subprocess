@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "./pi-compat.ts";
 import type { AgentConfig } from "./agents.ts";
 import { getAgentInstructionsFileName } from "./agents.ts";
 
