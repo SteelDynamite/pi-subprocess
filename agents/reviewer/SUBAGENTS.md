@@ -1,5 +1,5 @@
 ---
-description: Code review specialist for quality and security analysis
+description: Code review specialist for quality and security analysis; only use upon explicit request
 tools: read, grep, find, ls, bash
 model: openai-codex/gpt-5.5
 ---
