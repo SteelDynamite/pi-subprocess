@@ -18,7 +18,7 @@ import {
 } from "./constants.ts";
 import { createSubprocessLifecycle, getSubprocessLifecycleSnapshot, markSubprocessActivity, markSubprocessClosed, markSubprocessTerminating, recordSubprocessError } from "./lifecycle.ts";
 import { applyNestedSubprocessEvent } from "./nested.ts";
-import { getFinalOutput, isFailedResult, makeErrorResult } from "./result.ts";
+import { formatTokens, getFinalOutput, isFailedResult, makeErrorResult } from "./result.ts";
 import { formatWrongIntentReason, getRequiredSessionIntent, getWrongIntentRetry, persistSubprocessState, subprocessSettings, updateTrackedSession } from "./state.ts";
 import { getLocationalLoopError, makeChildLocationalEnv, notifyLocationalBoundaryDiscovered } from "./locational-guard.ts";
 import type { OnUpdateCallback, SessionIntent, SingleResult, SubprocessDetails } from "./types.ts";
@@ -159,6 +159,51 @@ function appendWarning(result: SingleResult, warning: string) {
 	result.warning = result.warning ? `${result.warning}\n${warning}` : warning;
 }
 
+const CONTEXT_LIMIT_STOP_REASON = "context_limit";
+const CONTEXT_LIMIT_PATTERNS = [
+	/\bcontext[_ -]?limit\b/i,
+	/context[_ -]?length[_ -]?exceeded/i,
+	/context[_ -]?(?:window|limit|length|size)[^\n]{0,120}(?:exceed|exceeded|exceeds|overflow|full|too (?:large|long|many)|maximum|max)/i,
+	/(?:exceed|exceeded|exceeds|overflow|over|too (?:large|long|many)|maximum|max)[^\n]{0,120}context[_ -]?(?:window|limit|length|size)/i,
+	/too[_ -]?many[_ -]?tokens/i,
+	/(?:prompt|input|messages?)[^\n]{0,120}(?:too (?:large|long)|token limit|tokens?[^\n]{0,80}(?:exceed|exceeded|exceeds|maximum|max))/i,
+	/(?:maximum|max)[^\n]{0,80}(?:context|tokens?)[^\n]{0,120}(?:requested|resulted|input|prompt|messages?)/i,
+	/input token count exceeds/i,
+];
+
+function trimEvidence(text: string): string {
+	const compact = text.replace(/\s+/g, " ").trim();
+	return compact.length > 240 ? `${compact.slice(0, 237)}...` : compact;
+}
+
+export function findContextLimitEvidence(...sources: Array<string | undefined>): string | undefined {
+	for (const source of sources) {
+		if (!source) continue;
+		for (const line of source.split(/\r?\n/)) {
+			if (CONTEXT_LIMIT_PATTERNS.some((pattern) => pattern.test(line))) return trimEvidence(line);
+		}
+	}
+	return undefined;
+}
+
+export function classifyContextLimitFailure(result: SingleResult, extraSources: string[] = []): boolean {
+	if (!isFailedResult(result) && !result.errorMessage) return false;
+	const evidence = findContextLimitEvidence(
+		result.stopReason,
+		result.errorMessage,
+		result.stderr,
+		result.stdout,
+		getFinalOutput(result.messages),
+		...extraSources,
+	);
+	if (!evidence) return false;
+	result.stopReason = CONTEXT_LIMIT_STOP_REASON;
+	const model = result.model ? ` for ${result.model}` : "";
+	const contextWindow = result.contextWindow ? ` (${formatTokens(result.contextWindow)} context window)` : "";
+	result.errorMessage = `Subprocess agent hit context limit${model}${contextWindow}. Evidence: ${evidence}`;
+	return true;
+}
+
 function hasMeaningfulTaskWork(result: SingleResult): boolean {
 	return result.messages.some((message) => {
 		const msg = message as any;
@@ -174,6 +219,7 @@ function hasMeaningfulTaskWork(result: SingleResult): boolean {
 export function shouldRetryPreferredModelFailure(result: SingleResult): boolean {
 	if (!isFailedResult(result)) return false;
 	if (hasMeaningfulTaskWork(result)) return false;
+	if (result.stopReason === CONTEXT_LIMIT_STOP_REASON) return true;
 	const text = [result.errorMessage, result.stderr, getFinalOutput(result.messages), result.stopReason]
 		.filter(Boolean)
 		.join("\n")
@@ -330,6 +376,8 @@ export async function runDelegation(
 		const updateLifecycleResultFields = () => {
 			const snapshot = getSubprocessLifecycleSnapshot(lifecycle);
 			if (snapshot.phase === "closed") currentResult.exitCode = snapshot.exitCode;
+			if (snapshot.stopReason) currentResult.stopReason = snapshot.stopReason;
+			if (snapshot.errorMessage) currentResult.errorMessage = snapshot.errorMessage;
 		};
 
 		const emitUpdate = () => {
@@ -343,6 +391,7 @@ export async function runDelegation(
 		};
 
 		try {
+			let contextLimitEventEvidence: string | undefined;
 			if (agentConfig.systemPrompt.trim()) {
 				const prompt =
 					agentConfig.kind === "locational"
@@ -375,10 +424,12 @@ export async function runDelegation(
 				const processLine = (line: string) => {
 					if (!line.trim()) return;
 					markSubprocessActivity(lifecycle);
+					contextLimitEventEvidence ??= findContextLimitEvidence(line);
 					let event: any;
 					try {
 						event = JSON.parse(line);
 					} catch {
+						currentResult.stdout = currentResult.stdout ? `${currentResult.stdout}\n${line}` : line;
 						return;
 					}
 					processChildJsonEvent(event, currentResult, emitUpdate);
@@ -427,6 +478,7 @@ export async function runDelegation(
 
 			if (lifecycle.exitCode === undefined) markSubprocessClosed(lifecycle, exitCode);
 			updateLifecycleResultFields();
+			classifyContextLimitFailure(currentResult, contextLimitEventEvidence ? [contextLimitEventEvidence] : []);
 			if (wasAborted) throw new Error("Subprocess agent was aborted");
 			return currentResult;
 		} finally {

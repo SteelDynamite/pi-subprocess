@@ -35,6 +35,7 @@ test("isFailedResult treats nonzero exit and error stop reasons as failures", ()
 	assert.equal(isFailedResult({ exitCode: 1, stopReason: "end" }), true);
 	assert.equal(isFailedResult({ exitCode: 0, stopReason: "error" }), true);
 	assert.equal(isFailedResult({ exitCode: 0, stopReason: "aborted" }), true);
+	assert.equal(isFailedResult({ exitCode: 0, stopReason: "context_limit" }), true);
 	assert.equal(isFailedResult({ exitCode: 0, stopReason: "end" }), false);
 });
 

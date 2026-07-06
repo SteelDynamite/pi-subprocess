@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { ADVERTISE_LOCATIONAL_AGENTS_ENV, LOCATIONAL_PREFERRED_MODELS_ENV, ORCHESTRATED_CHILD_ENV, SUBPROCESS_CHILD_ENV } from "../constants.ts";
-import { makeSubprocessChildEnv, runDelegation, resolveAgentModel, shouldRetryPreferredModelFailure } from "../execution.ts";
+import { classifyContextLimitFailure, findContextLimitEvidence, makeSubprocessChildEnv, runDelegation, resolveAgentModel, shouldRetryPreferredModelFailure } from "../execution.ts";
 
 function agent(kind) {
 	return {
@@ -99,8 +99,25 @@ test("resolveAgentModel uses env-configured locational preferred models and empt
 	}
 });
 
-test("shouldRetryPreferredModelFailure only retries pre-work provider/model failures", () => {
+test("context limit failures are classified distinctly", () => {
+	assert.match(findContextLimitEvidence("context_length_exceeded: maximum context length is 128000 tokens") ?? "", /context_length_exceeded/);
+	assert.equal(findContextLimitEvidence("context_limit"), "context_limit");
+	const result = {
+		exitCode: 1,
+		stderr: "BadRequest: This model's maximum context length is 128000 tokens. However, your messages resulted in 140000 tokens.",
+		messages: [],
+		model: "provider/spark",
+		contextWindow: 128000,
+	};
+
+	assert.equal(classifyContextLimitFailure(result), true);
+	assert.equal(result.stopReason, "context_limit");
+	assert.match(result.errorMessage, /Subprocess agent hit context limit for provider\/spark \(128k context window\)/);
+});
+
+test("shouldRetryPreferredModelFailure only retries pre-work provider/model/context failures", () => {
 	assert.equal(shouldRetryPreferredModelFailure({ exitCode: 1, stderr: "429 rate limit", messages: [] }), true);
+	assert.equal(shouldRetryPreferredModelFailure({ exitCode: 1, stopReason: "context_limit", stderr: "", messages: [] }), true);
 	assert.equal(
 		shouldRetryPreferredModelFailure({
 			exitCode: 1,
@@ -214,6 +231,73 @@ test("runDelegation retries explicit locational model failures using caller mode
 		} else {
 			process.env.PI_SUBPROCESS_TEST_STATE_FILE = originalStateFile;
 		}
+		process.argv[1] = originalArgv1;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("runDelegation retries pre-work context-limit failures using caller model", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-subprocess-context-fallback-"));
+	const originalArgv1 = process.argv[1];
+	const originalStateFile = process.env.PI_SUBPROCESS_TEST_STATE_FILE;
+	try {
+		const agentRoot = join(root, "loc-agent");
+		mkdirSync(agentRoot);
+		writeFileSync(join(agentRoot, "SUBAGENTS.md"), "---\nmodel: provider/spark\nresumable: false\n---\n");
+		const stateFile = join(root, "state.json");
+		writeFileSync(stateFile, "[]");
+		const piPath = join(root, "fake-pi.js");
+		writeFileSync(
+			piPath,
+			`const fs = require('node:fs');\n` +
+				`const stateFile = process.env.PI_SUBPROCESS_TEST_STATE_FILE;\n` +
+				`const args = process.argv.slice(2);\n` +
+				`const modelIndex = args.indexOf('--model');\n` +
+				`const model = modelIndex >= 0 ? args[modelIndex + 1] : '(default)';\n` +
+				`const calls = JSON.parse(fs.readFileSync(stateFile, 'utf8'));\n` +
+				`calls.push({ model });\n` +
+				`fs.writeFileSync(stateFile, JSON.stringify(calls));\n` +
+				`if (model === 'provider/spark') {\n` +
+				`\tprocess.stderr.write('context_length_exceeded: maximum context length is 128000 tokens');\n` +
+				`\tprocess.exit(1);\n` +
+				`}\n` +
+				`console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'ok via ' + model }] } }));\n`,
+		);
+
+		process.argv[1] = piPath;
+		process.env.PI_SUBPROCESS_TEST_STATE_FILE = stateFile;
+
+		const result = await runDelegation(
+			{ appendEntry: () => undefined },
+			{
+				ui: { select: async () => undefined, confirm: async () => false, input: async () => undefined, notify: () => undefined },
+				hasUI: false,
+				cwd: root,
+				sessionManager: { getBranch: () => [] },
+				model: { provider: "caller", id: "default", contextWindow: 1000000 },
+				modelRegistry: { getAvailable: () => [{ provider: "provider", id: "spark", contextWindow: 128000 }] },
+			},
+			root,
+			[],
+			"loc-agent",
+			"new",
+			"Fallback test",
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			(results) => ({ mode: "single", agentScope: "user", includeLocationalAgents: false, projectAgentsDir: null, locationalAgents: [], results }),
+			false,
+		);
+
+		const calls = JSON.parse(readFileSync(stateFile, "utf8"));
+		assert.deepEqual(calls.map((call) => call.model), ["provider/spark", "caller/default"]);
+		assert.equal(result.exitCode, 0);
+		assert.equal(result.model, "caller/default");
+		assert.match(result.warning ?? "", /Explicit locational model provider\/spark failed before task work; retried with caller model caller\/default/);
+	} finally {
+		if (originalStateFile === undefined) delete process.env.PI_SUBPROCESS_TEST_STATE_FILE;
+		else process.env.PI_SUBPROCESS_TEST_STATE_FILE = originalStateFile;
 		process.argv[1] = originalArgv1;
 		rmSync(root, { recursive: true, force: true });
 	}
