@@ -90,6 +90,8 @@ Use the locational path as `id` to delegate instead. Locational agents run from 
 
 Supported frontmatter: `description`, `tools`, `model`, `manifest`, `resumable`.
 
+Locational agents with `model:` use that comma-separated candidate list first, then fall back to the caller model if none are available. Locational agents without `model:` use `PI_SUBPROCESS_LOCATIONAL_PREFERRED_MODELS` as preferred candidates before the caller model when the env is set to a non-empty list. If the env is unset, they use the caller model directly. Set env to empty to disable preferred-model behavior explicitly. If an explicit or preferred locational model fails before meaningful task work because of a model/provider/rate/auth/pre-start error, pi-subprocess retries once in the same child session id with the caller model and reports the fallback in the result warning/details.
+
 Locational discovery defaults: max depth `6`, timeout `500ms`. Use `PI_SUBPROCESS_LOCATIONAL_SCAN_MAX_DEPTH` and `PI_SUBPROCESS_LOCATIONAL_SCAN_TIMEOUT_MS` to override them.
 
 ## Child Environment
