@@ -26,7 +26,6 @@ pi-subprocess/
     ├── scout/SUBAGENTS.md
     ├── planner/SUBAGENTS.md
     ├── reviewer/SUBAGENTS.md
-    ├── spark/SUBAGENTS.md
     └── worker/SUBAGENTS.md
 ```
 

@@ -56,6 +56,17 @@ test("scanLocationalAgents finds nested locational roots, skips node_modules, an
 	}
 });
 
+test("discoverAgents exposes the bundled behavioral-agent inventory", () => {
+	const root = tempDir();
+	try {
+		const discovery = discoverAgents(root, "project", { includeLocationalAgents: false });
+		assert.deepEqual(discovery.agents.map((agent) => agent.id).sort(), ["planner", "reviewer", "scout", "worker"]);
+		assert.equal(discovery.agents.find((agent) => agent.id === "scout")?.model, "gpt-5.6-luna");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("discoverAgents can omit locational agents without changing behavioral-agent scope", () => {
 	const root = tempDir();
 	try {
