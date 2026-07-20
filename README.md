@@ -8,7 +8,7 @@ Run specialized Pi agents with isolated contexts, or run shell commands, while t
 
 - **Agent subprocesses**: behavioral and locational Pi agents run in separate `pi` processes.
 - **Command subprocesses**: shell commands run with bounded foreground parallelism.
-- **Streaming progress**: single, parallel, chain, and command modes stream status.
+- **Streaming progress**: single, parallel, chain, and command modes stream status. Model usage labels append lowercase `fast` when pi-chatgpt Fast mode is effective.
 - **Consolidated results**: parent receives final output, exit status, cwd, stderr/stdout, usage, truncation metadata, and clear context-limit failures.
 - **Abort support**: Ctrl+C propagates to child processes.
 - **Legacy readers**: old state/env records are still read where needed for safe migration cleanup.

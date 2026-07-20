@@ -78,9 +78,23 @@ test("getDisplayItems and getNestedSubprocessIds extract assistant text and tool
 	assert.deepEqual(getNestedSubprocessIds(messages), ["a", "b"]);
 });
 
-test("formatUsageStats formats nonzero stats compactly", () => {
-	assert.equal(
-		formatUsageStats({ input: 1200, output: 25, cacheRead: 0, cacheWrite: 2000, cost: 0.01234, contextTokens: 5000, turns: 2 }, "provider/model"),
-		"2 turns ↑1.2k ↓25 W2.0k $0.0123 ctx:5.0k provider/model",
-	);
+test("formatUsageStats appends fast only when PI_CHATGPT_FAST is 1", () => {
+	const originalFast = process.env.PI_CHATGPT_FAST;
+	const usage = { input: 1200, output: 25, cacheRead: 0, cacheWrite: 2000, cost: 0.01234, contextTokens: 5000, turns: 2 };
+	try {
+		process.env.PI_CHATGPT_FAST = "0";
+		assert.equal(
+			formatUsageStats(usage, "provider/model"),
+			"2 turns ↑1.2k ↓25 W2.0k $0.0123 ctx:5.0k provider/model",
+		);
+
+		process.env.PI_CHATGPT_FAST = "1";
+		assert.equal(
+			formatUsageStats(usage, "provider/model"),
+			"2 turns ↑1.2k ↓25 W2.0k $0.0123 ctx:5.0k provider/model fast",
+		);
+	} finally {
+		if (originalFast === undefined) delete process.env.PI_CHATGPT_FAST;
+		else process.env.PI_CHATGPT_FAST = originalFast;
+	}
 });

@@ -30,7 +30,8 @@ export function formatUsageStats(
 	if (usage.cacheWrite) parts.push(`W${formatTokens(usage.cacheWrite)}`);
 	if (usage.cost) parts.push(`$${usage.cost.toFixed(4)}`);
 	if (usage.contextTokens && usage.contextTokens > 0) parts.push(`ctx:${formatTokens(usage.contextTokens)}`);
-	if (model) parts.push(model);
+	// PI_CHATGPT_FAST is pi-chatgpt's already-effective caller-model signal, so this needs no local model allowlist.
+	if (model) parts.push(`${model}${process.env.PI_CHATGPT_FAST === "1" ? " fast" : ""}`);
 	return parts.join(" ");
 }
 
